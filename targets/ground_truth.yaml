@@ -1,0 +1,17 @@
+# Ground truth for the NightTrace demo lab — the planted weaknesses the engine
+# is expected to find. Used by `nighttrace score` / run_demo to self-grade.
+services:
+  - "127.0.0.1:8008"
+
+weaknesses:
+  - {type: default_credentials, host: 127.0.0.1}
+  - {type: exposed_git, host: 127.0.0.1}
+  - {type: reflected_input, host: 127.0.0.1}
+  - {type: version_disclosure, host: 127.0.0.1}
+  - {type: exposed_path, host: 127.0.0.1}
+  - {type: hardcoded_credential}
+  - {type: unsafe_function}
+  - {type: missing_mitigation}
+
+flags:
+  - "FLAG{nighttrace_crown_jewel}"

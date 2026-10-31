@@ -1,0 +1,18 @@
+# Scope for the self-contained demo lab (localhost only). Used by run_demo.py.
+engagement: "nighttrace-demo"
+tier: breach
+
+scope:
+  hosts:
+    - 127.0.0.1
+  binaries:
+    - targets/bin/auth_service
+  ports: [8008, 8080, 3000]   # focused + fast; the demo lab listens on 8008
+
+limits:
+  max_runtime_minutes: 5
+  rate_limit_pps: 300
+  destructive: false
+
+flags:
+  pattern: "FLAG\\{.*?\\}"

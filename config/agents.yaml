@@ -1,0 +1,22 @@
+# Declarative agent configuration (bonus B-4).
+# The reference engine is deterministic; `model` is used only when the optional
+# LLM narrative layer is enabled (ANTHROPIC_API_KEY set). Tools are illustrative
+# of each agent's surface.
+agents:
+  recon:
+    tools: [tcp_connect_scan]
+    max_parallel: 8
+  web:
+    model: claude-sonnet
+    tools: [http_crawler, http_client]
+    max_parallel: 8
+  binary:
+    model: claude-sonnet
+    tools: [strings, elf_checksec]
+    max_parallel: 4
+  verifier:
+    tools: [http_client, binary_reader]
+    max_parallel: 8
+  reporter:
+    model: claude-opus
+    tools: [report_builder]

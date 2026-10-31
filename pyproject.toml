@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nighttrace"
+version = "0.1.0"
+description = "Autonomous, multi-agent penetration-testing engine (authorized, in-scope, non-destructive)."
+requires-python = ">=3.11"
+dependencies = ["pyyaml>=6.0", "fastapi>=0.110", "uvicorn>=0.29"]
+
+[project.optional-dependencies]
+llm = ["anthropic>=0.39"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+nighttrace = "nighttrace.cli:main"
+
+[tool.setuptools]
+packages = [
+    "nighttrace", "nighttrace.agents", "nighttrace.checks",
+    "nighttrace.reasoning", "nighttrace.safety", "nighttrace.api",
+]
+
+[tool.setuptools.package-data]
+nighttrace = ["dashboard/*.html"]

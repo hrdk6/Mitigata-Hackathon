@@ -1,0 +1,83 @@
+# Declarative checks (bonus B-4): add or change a check here, no code required.
+# Each check: where it applies (surface/when), how to probe (Suspected), and how
+# to verify (Confirmed). The engine maps each probe/verify `type` to a safe,
+# non-destructive handler.
+checks:
+  - id: web-default-credentials
+    surface: web
+    ptes_phase: exploitation
+    when: {service: http}
+    probe:
+      type: http_login
+      paths: ["/login"]
+      username_field: username
+      password_field: password
+      credentials: [["admin", "admin"], ["admin", "password"], ["administrator", "admin"], ["root", "root"]]
+      fail_contains: "Invalid"
+    verify:
+      type: http_login
+      authed_path: "/admin"
+    severity: high
+    fix: "Remove default accounts; enforce a strong password policy and account lockout."
+
+  - id: web-git-exposure
+    surface: web
+    ptes_phase: vulnerability_analysis
+    when: {service: http}
+    probe: {type: http_git_exposure, path: "/.git/config"}
+    verify: {type: http_git_exposure}
+    severity: medium
+    fix: "Block access to .git over HTTP; never deploy the VCS directory to the web root."
+
+  - id: web-reflected-input
+    surface: web
+    ptes_phase: vulnerability_analysis
+    when: {service: http}
+    probe: {type: http_reflected_input, paths: ["/search"], param: q}
+    verify: {type: http_reflected_input}
+    severity: medium
+    fix: "Apply context-aware output encoding to user-controlled values; add a Content-Security-Policy."
+
+  - id: web-sensitive-paths
+    surface: web
+    ptes_phase: intelligence_gathering
+    when: {service: http}
+    probe:
+      type: http_paths
+      paths: ["/admin", "/backup", "/robots.txt", "/.env", "/server-status"]
+      expect_status: [200, 401, 403]
+      severity: low
+    verify: {type: http_status, expect_status: [200, 401, 403]}
+    severity: low
+    fix: "Restrict access, require authentication, or remove the endpoint if it is not meant to be public."
+
+  - id: web-server-banner
+    surface: web
+    ptes_phase: intelligence_gathering
+    when: {service: http}
+    probe: {type: http_header_disclosure, path: "/"}
+    verify: {type: http_header_present}
+    severity: low
+    fix: "Suppress or genericise the Server header to avoid version fingerprinting."
+
+  - id: bin-weak-strings
+    surface: binary
+    ptes_phase: vulnerability_analysis
+    probe:
+      type: binary_strings
+      credentials:
+        - "(?i)pass(word|wd)?\\s*[:=]\\s*\\S+"
+        - "(?i)secret\\s*[:=]\\s*\\S+"
+        - "(?i)api[_-]?key\\s*[:=]\\s*\\S+"
+      unsafe_functions: ["gets", "strcpy", "strcat", "sprintf", "system", "popen", "exec"]
+    verify: {type: binary_strings}
+    severity: high
+    fix: "Remove embedded secrets; replace unsafe functions with bounded-length safe equivalents."
+
+  - id: bin-checksec
+    surface: binary
+    ptes_phase: vulnerability_analysis
+    probe: {type: binary_checksec}
+    verify: {type: binary_checksec}
+    severity: medium
+    fix: "Compile with -fstack-protector-strong, -fPIE -pie, full RELRO and a non-executable stack."

@@ -1,0 +1,9 @@
+services:
+  nighttrace:
+    build: .
+    container_name: nighttrace
+    ports:
+      - "8000:8000"
+    # The default command runs the self-contained demo and serves the dashboard
+    # at http://localhost:8000/ . Everything stays inside the container.
+    command: python run_demo.py --serve --api-port 8000

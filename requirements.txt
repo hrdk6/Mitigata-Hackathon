@@ -1,0 +1,8 @@
+# NightTrace runtime dependencies.
+# The engine core (scanning, blackboard, agents) runs on the Python standard
+# library alone. These are needed only for config parsing and the live API.
+pyyaml>=6.0
+fastapi>=0.110
+uvicorn>=0.29
+# Optional: install `anthropic` to enable the LLM report-narrative layer.
+# anthropic>=0.39
