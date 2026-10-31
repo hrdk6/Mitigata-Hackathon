@@ -134,6 +134,60 @@ checks:
     severity: low
     fix: "Disable automatic directory indexing on the web server."
 
+  - id: web-security-headers
+    surface: web
+    ptes_phase: vulnerability_analysis
+    when: {service: http}
+    probe: {type: http_security_headers}
+    verify: {type: http_security_headers}
+    severity: low
+    fix: "Set Content-Security-Policy, X-Frame-Options, X-Content-Type-Options, and HSTS (over TLS)."
+
+  - id: web-insecure-cookies
+    surface: web
+    ptes_phase: vulnerability_analysis
+    when: {service: http}
+    probe: {type: http_insecure_cookies}
+    verify: {type: http_insecure_cookies}
+    severity: low
+    fix: "Set HttpOnly and SameSite on session cookies (and Secure over TLS)."
+
+  - id: web-cors-misconfig
+    surface: web
+    ptes_phase: vulnerability_analysis
+    when: {service: http}
+    probe: {type: http_cors}
+    verify: {type: http_cors}
+    severity: high
+    fix: "Validate Origin against an allow-list; never reflect arbitrary origins with credentials."
+
+  - id: web-http-methods
+    surface: web
+    ptes_phase: vulnerability_analysis
+    when: {service: http}
+    probe: {type: http_methods}
+    verify: {type: http_methods}
+    severity: medium
+    fix: "Disable TRACE/TRACK and any write methods (PUT/DELETE) not required by the application."
+
+  - id: web-open-redirect
+    surface: web
+    ptes_phase: vulnerability_analysis
+    when: {service: http}
+    probe: {type: http_open_redirect}
+    verify: {type: http_open_redirect}
+    severity: medium
+    fix: "Allow-list redirect targets; never place user-controlled values directly in Location."
+
+  - id: web-backup-files
+    surface: web
+    ptes_phase: intelligence_gathering
+    when: {service: http}
+    probe: {type: http_backup_files}
+    verify: {type: http_backup_files}
+    severity: medium
+    fix: "Remove backup/secret files from the web root and block access to dotfiles."
+
   - id: bin-weak-strings
     surface: binary
     ptes_phase: vulnerability_analysis
@@ -159,3 +213,92 @@ checks:
     verify: {type: binary_checksec}
     severity: medium
     fix: "Compile with -fstack-protector-strong, -fPIE -pie, full RELRO and a non-executable stack."
+
+  # -- network-service checks (any open port on an in-scope host) ------------
+  - id: net-vulnerable-version
+    surface: network
+    ptes_phase: vulnerability_analysis
+    probe: {type: net_version}       # no `when`: fingerprints every open port
+    verify: {type: net_version}
+    severity: high
+    fix: "Upgrade the affected service to a patched release."
+
+  - id: net-redis-unauth
+    surface: network
+    ptes_phase: vulnerability_analysis
+    when: {service: redis}
+    probe: {type: net_unauth}
+    verify: {type: net_unauth}
+    severity: high
+    fix: "Require AUTH, enable protected-mode, and bind Redis to localhost / a trusted interface."
+
+  - id: net-memcached-unauth
+    surface: network
+    ptes_phase: vulnerability_analysis
+    when: {service: memcached}
+    probe: {type: net_unauth}
+    verify: {type: net_unauth}
+    severity: medium
+    fix: "Enable SASL, disable UDP, and bind memcached to localhost / a trusted interface."
+
+  - id: net-elasticsearch-open
+    surface: network
+    ptes_phase: vulnerability_analysis
+    when: {service: elasticsearch}
+    probe: {type: net_unauth}
+    verify: {type: net_unauth}
+    severity: high
+    fix: "Enable the security realm (authentication + TLS) and restrict network access."
+
+  - id: net-ftp-anonymous
+    surface: network
+    ptes_phase: vulnerability_analysis
+    when: {service: ftp}
+    probe: {type: net_unauth}
+    verify: {type: net_unauth}
+    severity: medium
+    fix: "Disable the anonymous account unless a public read-only area is explicitly intended."
+
+  - id: net-telnet-cleartext
+    surface: network
+    ptes_phase: vulnerability_analysis
+    when: {service: telnet}
+    probe: {type: net_unauth}
+    verify: {type: net_unauth}
+    severity: medium
+    fix: "Disable Telnet and use SSH instead."
+
+  - id: net-database-exposed
+    surface: network
+    ptes_phase: vulnerability_analysis
+    probe: {type: net_unauth, services: [mysql, postgres, mssql, mongodb]}
+    verify: {type: net_unauth}
+    severity: medium
+    fix: "Bind the database to localhost / a private interface and firewall the port."
+
+  - id: net-smb
+    surface: network
+    ptes_phase: vulnerability_analysis
+    when: {service: smb}             # SMBv1 still enabled; message signing not required
+    probe: {type: net_unauth}
+    verify: {type: net_unauth}
+    severity: high
+    fix: "Disable SMBv1 and require SMB signing on servers and clients."
+
+  - id: net-snmp-default
+    surface: network
+    ptes_phase: vulnerability_analysis
+    when: {service: snmp}            # UDP/161 — recon runs it once per host
+    probe: {type: net_snmp}
+    verify: {type: net_unauth}
+    severity: medium
+    fix: "Remove default SNMP communities; use SNMPv3 with authentication and restrict SNMP by ACL."
+
+  - id: net-tls-certificate
+    surface: network
+    ptes_phase: vulnerability_analysis
+    when: {tls: true}
+    probe: {type: tls_audit}
+    verify: {type: tls_audit}
+    severity: low
+    fix: "Install a valid CA-signed certificate and disable obsolete TLS versions (SSLv3/TLS1.0/1.1)."

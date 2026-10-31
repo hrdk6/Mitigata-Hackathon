@@ -104,15 +104,19 @@ class TargetScanManager:
 
     def _scan_config(self, target: WebTarget) -> Config:
         limits = self._base_config.limits
+        ports = [target.port]
+        if 8833 not in ports:
+            ports.append(8833)
         return Config(
             engagement=f"{self._base_config.engagement} — {target.url}",
             tier="recon",  # web + network only; no local binaries are inherited.
-            scope=Scope(hosts=[target.host], ports=[target.port]),
+            scope=Scope(hosts=[target.host], ports=ports),
             limits=Limits(
                 max_runtime_minutes=min(max(limits.max_runtime_minutes, 0.1), 5.0),
-                rate_limit_pps=min(max(limits.rate_limit_pps, 1), 20),
+                rate_limit_pps=min(max(limits.rate_limit_pps, 1), 50),
                 destructive=False,
                 max_crawl_pages=min(max(limits.max_crawl_pages, 1), 50),
+                connect_timeout=3.0,
             ),
             flag_pattern=self._base_config.flag_pattern,
         )

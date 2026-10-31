@@ -8,7 +8,7 @@ writes one clean report — following the **PTES** methodology, from a single co
 **only ever inside the scope it is given**.
 
 ![Status](https://img.shields.io/badge/status-working%20reference%20impl-success)
-![Tests](https://img.shields.io/badge/tests-12%20passing-success)
+![Tests](https://img.shields.io/badge/tests-45%20passing-success)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![Orchestration](https://img.shields.io/badge/agents-LangGraph-7E56C2)
 ![API](https://img.shields.io/badge/API-FastAPI-009688)
@@ -37,6 +37,7 @@ writes one clean report — following the **PTES** methodology, from a single co
 - [Network discovery & OS fingerprinting](#network-discovery--os-fingerprinting)
 - [PTES mapping](#ptes-mapping)
 - [Hypothesis-driven threat modeling](#hypothesis-driven-threat-modeling)
+- [Vulnerability coverage](#vulnerability-coverage)
 - [Finding lifecycle & verification](#finding-lifecycle--verification)
 - [Attack-path chaining & flag capture](#attack-path-chaining--flag-capture)
 - [Data model](#data-model)
@@ -88,6 +89,9 @@ autonomously.
 | **Fingerprint the OS** | Infers each host's OS (Windows / Linux / macOS / iOS / device) from TTL, port signature, and MAC — no admin rights — to steer method choice. |
 | **Model threats up front** | Formulates confidence-scored hypotheses about the most frequently-appearing weaknesses the moment a signal appears, and concentrates the agents on them first. |
 | **Cover all three surfaces** | Network, web, **and** binary analysis — not just one. |
+| **Find network vulnerabilities** | Identifies the software and version on every open port and matches it against an offline CVE set; detects unauthenticated Redis / Elasticsearch / Memcached, anonymous FTP, Telnet, exposed databases, SMBv1, unsigned SMB, default SNMP communities, and weak TLS. |
+| **Find web vulnerabilities** | Default credentials, SQL injection, path traversal, reflected input, CORS reflection, open redirects, dangerous HTTP methods, exposed `.git` / backup / secret files, missing security headers, and insecure cookies. |
+| **Run from the browser** | Calibrate the scope in the UI and press **Run**; **Re-scan** stops a run in progress and starts over on the new scope — no restart. |
 | **Coordinate** | Agents write to a shared blackboard and hand work to each other; no duplicated effort. |
 | **Verify** | Every weakness is *proven* with captured evidence before it counts as a finding. |
 | **Map to PTES** | Every task, finding, and log line is tagged with its PTES phase. |
@@ -222,8 +226,8 @@ and one safety layer.
 | Agent | Responsibility | Primary tools | Default PTES phase |
 |---|---|---|---|
 | **Orchestrator** | Plans the engagement, dispatches & dedupes tasks, enforces the time/rate budget, tags PTES phases, **formulates threat-model hypotheses and boosts the work that chases them first**, decides when the run is complete, triggers reporting. | LangGraph control loop | Threat Modeling |
-| **Recon Agent** | Finds live hosts, open ports, services, and versions across the in-scope range, **plus a best-effort OS fingerprint per host**; seeds the blackboard with assets. | `nmap`, `masscan` | Intelligence Gathering |
-| **Web Agent** | Crawls web apps, enumerates endpoints (`/login`, `/admin`, …), flags common issues (reflected input, default creds, exposed files, injection indicators). | Katana, OWASP ZAP, HTTP client | Vulnerability Analysis |
+| **Recon Agent** | Finds live hosts, open ports, services, and versions across the in-scope range, **plus a best-effort OS fingerprint per host**; seeds the blackboard with assets, then **runs the network-service checks on every open port** (version → CVE, unauthenticated exposure, TLS, SMB) and probes SNMP once per host. | `nmap`, `masscan`, built-in service probes | Intelligence Gathering |
+| **Web Agent** | Crawls web apps, enumerates endpoints (`/login`, `/admin`, …), flags common issues (reflected input, default creds, injection indicators, exposed `.git` / backup files, CORS, open redirects, dangerous methods, missing headers, cookie flags). | Katana, OWASP ZAP, HTTP client | Vulnerability Analysis |
 | **Binary Agent** | Statically analyses provided binaries for hard-coded secrets, unsafe functions (`gets`, `strcpy`, `system`), missing mitigations, weak crypto. | Ghidra (headless), radare2, angr | Vulnerability Analysis |
 | **Exploitation & Verification Agent** | Takes *suspected* findings and **proves** them with a safe, non-destructive action (log in with the default password, send a marked payload, read a flag). Promotes `Suspected → Confirmed` with captured evidence. | Scoped credential / payload probes | Exploitation |
 | **Reporting Agent** | Assembles the PTES-structured report, orders findings by severity, reconstructs the attack path, and writes plain-English fixes. | LLM synthesis over the blackboard | Reporting |
@@ -323,7 +327,7 @@ finding is only called `Confirmed` **after** a real login succeeded and evidence
 ## Reliability & scale
 
 Autonomy only counts if the run survives the messy middle — a tool that hangs, a crash, a blackboard
-that grows faster than any single prompt can hold. Three mechanisms keep a run finishing cleanly and
+that grows faster than any single prompt can hold. Five mechanisms keep a run finishing cleanly and
 on time.
 
 - **Bounded tasks.** Every task has a timeout and a small retry budget. A tool that hangs is killed,
@@ -337,6 +341,14 @@ on time.
   pulled from the store. The blackboard can grow to hundreds of findings while every prompt stays
   small, focused, and cheap. Bulky evidence (long tool output, captures) lives on disk; the prompt
   sees a short excerpt and a reference.
+- **Liveness-gated ranges.** When the scope names a whole network, a quick parallel probe on a few
+  common ports clears dead addresses first — a host counts as up if any port is open *or actively
+  refuses* — so a mostly-empty /24 doesn't pay a full port scan per dead address. Hosts listed
+  explicitly are always scanned in full.
+- **Preemptible runs.** A run stops cooperatively between batches (`POST /run/stop`), and starting a
+  new one (`POST /run`, the dashboard's **Re-scan**) stops the current run first — so a mistaken
+  scope never ties the engine up for its whole time budget. A stopped run still ends in a report
+  built from what it gathered.
 
 ---
 
@@ -401,7 +413,7 @@ config** (see [Extensibility](#extensibility-add-checks-and-agents-by-config)).
 
 | Surface | Tools | Example structured output |
 |---|---|---|
-| Network | `nmap`, `masscan` | `Asset(host=10.10.7.10, port=80, service=http, product="nginx 1.18")` |
+| Network | `nmap`, `masscan`, built-in service probes (banner, TLS, SMB, SNMP, Redis, …) | `Asset(host=10.10.7.10, port=80, service=http, product="nginx 1.18.0")` |
 | Web | Katana, OWASP ZAP, HTTP client | `Finding(type=reflected_input, endpoint="/search?q=", status=Suspected)` |
 | Binary | Ghidra (headless), radare2, angr, `checksec` | `Finding(type=hardcoded_cred, symbol="check_pw", value="•••", status=Suspected)` |
 | Verification | credential/payload probes | `Evidence(kind=http, content="200 OK + session cookie", proves=#42)` |
@@ -550,6 +562,89 @@ python -m nighttrace.cli train --dataset my_dataset.json
 
 ---
 
+## Vulnerability coverage
+
+What the engine looks for today: **26 declarative checks across all three surfaces**, each with a
+matching verify step. Every probe is read-only, passes through the Scope Guard, and works offline.
+
+### Network services (every open port, plus UDP/161)
+
+| Check | What it finds | Severity | Verified by |
+|---|---|---|---|
+| `net-vulnerable-version` | Product + version from a banner, `Server` header, or nmap product string, matched against the offline CVE set below | per CVE | Re-reading the banner: same product and version |
+| `net-redis-unauth` | Redis answering `INFO` without `AUTH` | high | Re-sending `INFO` |
+| `net-elasticsearch-open` | Elasticsearch serving cluster info without authentication | high | Re-sending `GET /` |
+| `net-memcached-unauth` | memcached answering `stats` without SASL | medium | Re-sending `stats` |
+| `net-ftp-anonymous` | FTP accepting the anonymous login (it never lists or transfers files) | medium | Re-trying the login |
+| `net-telnet-cleartext` | Telnet exposed — credentials travel in cleartext | medium | Re-checking the port |
+| `net-database-exposed` | MySQL / PostgreSQL / MSSQL / MongoDB reachable over the network | medium | Re-checking the port |
+| `net-smb` | **SMBv1** still enabled (the EternalBlue class) · SMB **signing not required** (NTLM relay) | high · medium | Repeating the SMB1 / SMB2 negotiation |
+| `net-snmp-default` | SNMP answering `GET sysDescr.0` with community `public` or `private` (probed once per host) | medium · high | Re-trying the same community |
+| `net-tls-certificate` | Self-signed, expired, mismatched, or untrusted certificate; SSLv3 / TLS 1.0 / 1.1 negotiated | low – medium | Re-auditing the handshake |
+
+**Offline CVE correlation.** Version-based detection — the same idea as a baseline scanner, and
+labelled that way in the report. The set is curated and high-signal, and needs no NVD API, key, or
+internet, so it works on an isolated lab network:
+
+| Product | Affected versions | CVE | Severity |
+|---|---|---|---|
+| vsftpd | 2.3.4 (backdoored build) | CVE-2011-2523 | critical |
+| ProFTPD | 1.3.5 (`mod_copy`) | CVE-2015-3306 | critical |
+| Apache httpd | 2.4.49 · 2.4.50 | CVE-2021-41773 · CVE-2021-42013 | critical |
+| Exim | < 4.92 · < 4.94.2 ("21Nails") | CVE-2019-10149 · CVE-2020-28018 | critical |
+| Webmin | 1.890 | CVE-2019-15107 | critical |
+| OpenSSL | 1.0.1 – 1.0.1f (Heartbleed) · 3.0.0 – 3.0.6 | CVE-2014-0160 · CVE-2022-3602 | high |
+| OpenSSH | < 7.4 · < 7.7 | CVE-2016-10009 · CVE-2018-15473 | high · medium |
+| Dropbear | < 2016.74 | CVE-2016-7406 | high |
+| Microsoft IIS | 6.0 (WebDAV) | CVE-2017-7269 | high |
+| nginx | 0.5.6 – 1.13.2 · 0.6.18 – 1.20.0 (resolver) | CVE-2017-7529 · CVE-2021-23017 | medium |
+
+Add an entry to `nighttrace/vulndb.py` and every scan picks it up — no engine changes.
+
+### Web applications (every HTTP service recon finds)
+
+| Check | What it finds | Severity |
+|---|---|---|
+| `web-default-credentials` | A login that accepts a default or guessable account — proven by reaching the authenticated page | high |
+| `web-sql-injection` | Error-based SQL injection (a single-quote differential; no writes) | high |
+| `web-path-traversal` | Path traversal / LFI that reads a benign system file | high |
+| `web-cors-misconfig` | `Access-Control-Allow-Origin` reflecting an attacker's origin — high when credentials are allowed | high · medium |
+| `web-git-exposure` | A readable `/.git/config` | medium |
+| `web-reflected-input` | A unique marker reflected unescaped (XSS indicator) | medium |
+| `web-http-methods` | TRACE enabled (Cross-Site Tracing, proven by the echo), PUT / DELETE allowed | medium |
+| `web-open-redirect` | Redirect parameters that send users to an external URL | medium |
+| `web-backup-files` | Downloadable `.env`, SQL dumps, `.bak` files, keys, `.htpasswd`, … | medium |
+| `web-sensitive-paths` | Reachable admin, debug, and config endpoints | low |
+| `web-security-headers` | Missing CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy (and HSTS over TLS) | low |
+| `web-insecure-cookies` | Cookies set without HttpOnly / SameSite (and Secure over TLS) | low |
+| `web-directory-listing` | Auto-generated directory indexes | low |
+| `web-server-banner` | A `Server` header disclosing software and version | low |
+
+### Binaries (files listed in scope)
+
+| Check | What it finds | Severity |
+|---|---|---|
+| `bin-weak-strings` | Hard-coded credentials, keys, and tokens; references to unsafe C functions (`gets`, `strcpy`, `system`, …) | high · medium |
+| `bin-checksec` | Missing PIE, missing stack canary | medium |
+
+### How it stays accurate
+
+- **Proof before reporting.** Only findings that reproduce on the verify step become `Confirmed`.
+- **Conservative version matching.** A CVE fires only when the product is clearly identified *and*
+  the version sits inside a precisely known-vulnerable range. OpenSSL letter releases are ordered
+  correctly, so `1.0.1g` — the Heartbleed fix — is never reported as vulnerable.
+- **Catch-all awareness.** Path and file checks first ask for a random, nonexistent path. A "hit" that
+  looks the same as that answer — an SPA that returns 200 for every route, or a WAF that 403s
+  everything — is a catch-all page, not an exposed resource, and is not reported.
+- **Unknown means no.** The protocol probes (SMB, SNMP, TLS) report only on a well-formed, positive
+  answer; a timeout, a refusal, or an unexpected reply produces no finding. Checked against a real
+  Windows SMB server (SMB 3.0.2, signing required, SMBv1 off), the SMB check correctly stays silent.
+
+> No scanner finds every vulnerability. NightTrace is built for **precision over volume**: a shorter
+> list where every item is proven beats a long list of guesses.
+
+---
+
 ## Finding lifecycle & verification
 
 The difference between a scanner and a pentester is **proof**. NightTrace models every weakness as a
@@ -577,6 +672,10 @@ stateDiagram-v2
 | SQL injection | Boolean/time-based differential (no `DROP`, no writes) | Measurable differential response |
 | Hard-coded password in binary | Use it against the live service it belongs to | A working session on that service |
 | Planted flag reachable | Read the flag file/endpoint | The `FLAG{…}` string, with its location |
+| Vulnerable service version | Re-read the banner / `Server` header | The same product and version, with the CVE it matches |
+| Unauthenticated service (Redis, Elasticsearch, …) | Repeat the same read-only query | The service answering again without credentials |
+| SMBv1 / unsigned SMB | Repeat the SMB negotiation | The negotiate response (dialect, security mode) |
+| CORS reflection / open redirect | Re-send the request | The reflected origin / the external `Location` |
 
 **How findings are ranked.** Severity combines impact and exploitability, then is **boosted by
 chaining value** — a finding that sits on the path to the crown jewel outranks an isolated one of the
@@ -694,9 +793,19 @@ GET  /discover                     # host-discovery page: live hosts on the WiFi
 GET  /network/interfaces           # detected local subnets (prefill the scan)
 POST /network/scan                 # non-destructive LAN sweep: live hosts, ports, OS guess
 POST /network/scope                # write config/scope.yaml from the hosts you pick
+GET  /scope-editor                 # scope calibration page: edit config/scope.yaml in the browser
+GET  /scope                        # the current config/scope.yaml (or a template)
+POST /scope                        # validate + write config/scope.yaml (destructive is forced off)
+POST /run                          # scan the current scope.yaml now (stops a run in progress first)
+POST /run/stop                     # stop the current run; its report covers what was gathered
+GET  /run/status                   # idle | running | done | cancelled | error, plus live counts
 POST /web/scan                     # scan one authorised private/loopback IPv4 website from the dashboard
 GET  /web/scan/status              # dashboard target-scan state
 ```
+
+The dashboard's **Run scan** button calls `POST /run`. While a scan is running it becomes
+**Re-scan** — stop the current run and start over on the latest `scope.yaml` — and **Stop** aborts
+it. Each run writes into a fresh blackboard, so the view always shows exactly one engagement.
 
 ```jsonc
 // GET /targets/5/findings
@@ -753,6 +862,20 @@ checks:
     fix: "Change default credentials; enforce strong password policy and lockout."
 ```
 
+Network checks work the same way — `when` matches the service recon identified on a port:
+
+```yaml
+# config/checks.yaml — a network-service check
+  - id: net-redis-unauth
+    surface: network
+    ptes_phase: vulnerability_analysis
+    when: { service: redis }                # fires on every open Redis port
+    probe:  { type: net_unauth }            # read-only INFO, no AUTH
+    verify: { type: net_unauth }            # re-sent before it can be Confirmed
+    severity: high
+    fix: "Require AUTH, enable protected-mode, and bind Redis to a trusted interface."
+```
+
 ```yaml
 # config/agents.yaml — register or re-tier an agent
 agents:
@@ -793,7 +916,9 @@ nighttrace/
 ├── models.py                # blackboard data types
 ├── blackboard.py            # shared SQLite store: assets, findings, tasks, events, edges
 ├── orchestrator.py          # autonomous control loop (plan → threat-model → dispatch → integrate → report)
-├── tools.py                 # scoped tool primitives (tcp connect scan, http, binary read, TTL ping)
+├── tools.py                 # scoped tool primitives (tcp connect scan, liveness, http, binary read, TTL ping)
+├── netservices.py           # read-only service probes: banner/version, unauth exposure, TLS, SMB, SNMP
+├── vulndb.py                # offline version -> CVE database (curated, conservative matching)
 ├── netdiscover.py           # LAN host discovery + scope writer (the /discover page)
 ├── osfp.py                  # privilege-free OS fingerprinting (TTL + ports + MAC)
 ├── attack_graph.py          # cross-surface chaining + path search (B-2)
@@ -802,27 +927,28 @@ nighttrace/
 ├── safety/
 │   └── scope_guard.py       # default-deny allow/exclude, non-destructive, rate limit
 ├── agents/
-│   ├── recon.py             # FR-1  discovery + active HTTP detection + OS fingerprint + hypotheses
+│   ├── recon.py             # FR-1  discovery + OS fingerprint + network-service checks + hypotheses
 │   ├── web.py               # FR-2  crawl + web checks + hypotheses
 │   ├── binary.py            # FR-3  static binary analysis + hypotheses
 │   └── verifier.py          # FR-6  proof-of-finding + B-1 flag capture + hypothesis validation
 ├── checks/
-│   └── engine.py            # declarative probe/verify handlers (B-4)
+│   └── engine.py            # declarative probe/verify handlers: web, network, binary (B-4)
 ├── reasoning/
 │   ├── hypothesis.py        # hypothesis-driven threat modeling (PTES phase 3)
 │   ├── heuristic.py         # deterministic planner + boost-aware scorer (default)
 │   └── llm.py               # optional Claude narrative layer
 ├── api/
-│   └── server.py            # FastAPI: /targets /findings /attack-path /report /score /events /hypotheses /discover /network/*
+│   └── server.py            # FastAPI: /targets /findings /attack-path /report /score /events /hypotheses /discover /network/* /scope /run
 └── dashboard/
-    ├── index.html           # B-5 live dashboard (incl. threat-model hypotheses panel)
-    └── discover.html        # network host-discovery page
+    ├── index.html           # B-5 live dashboard: Run / Re-scan / Stop, hypotheses panel
+    ├── discover.html        # network host-discovery page
+    └── scope.html           # scope calibration page (/scope-editor)
 config/                      # scope.example.yaml · scope.demo.yaml · checks.yaml · agents.yaml
 targets/                     # bundled intentionally-vulnerable lab (localhost only)
 ├── demo_lab.py              # the target app
 ├── make_sample_binary.py    # generates the sample binary
 └── ground_truth.yaml        # planted weaknesses, for self-scoring
-tests/                       # scope guard · blackboard · checks · end-to-end
+tests/                       # scope guard · blackboard · checks · hypotheses · network / web / wave-3 detection · end-to-end
 run_demo.py                  # one-command self-contained demo
 Dockerfile · docker-compose.yml · requirements.txt · pyproject.toml
 ```
@@ -934,9 +1060,13 @@ provide one.
 **What runs on any network today**
 
 - **Discovery** — live hosts, open ports, service/version (nmap or built-in connect scan).
+- **Network services** — the software and version on every open port matched against the offline
+  CVE set; unauthenticated Redis, Elasticsearch, and Memcached; anonymous FTP; Telnet; exposed
+  databases; SMBv1 and unsigned SMB; default SNMP communities; weak TLS certificates and protocols.
 - **Web** — default credentials, exposed `.git`, reflected XSS, error-based **SQL injection**,
-  **path traversal / LFI**, directory listing, sensitive/backup files, version disclosure — tested
-  against both configured paths **and parameters discovered while crawling** the real app.
+  **path traversal / LFI**, CORS reflection, open redirects, dangerous HTTP methods, directory
+  listing, sensitive/backup files, missing security headers, insecure cookies, version disclosure —
+  tested against both configured paths **and parameters discovered while crawling** the real app.
 - **Binary** — hard-coded secrets (passwords, API keys, private keys, DB connection strings), unsafe
   C functions, and `checksec`-style missing mitigations (no PIE / no canary) on ELF files.
 - Every finding is **verified with captured evidence**, chained into an attack path, and reported —
@@ -949,6 +1079,14 @@ provide one.
 - SQL-injection detection is error-based; **blind/time-based SQLi and OS command injection are not
   implemented**.
 - Logic flaws (auth bypass, IDOR, business logic) are outside the automated checks.
+- CVE correlation is **version-based**: it matches the version a service advertises, and the verify
+  step re-confirms that banner, not exploitability. Distributions often backport fixes without
+  changing the version string (e.g. Ubuntu's OpenSSH), so a patched package can still match — treat
+  these as "check the patch level" leads.
+- Obsolete-TLS detection is limited by the scanner's own TLS library: a modern OpenSSL may refuse to
+  negotiate TLS 1.0 / 1.1 at all, so a server that speaks *only* those can be missed.
+- SMB is probed on 445 (direct-hosted) only. SNMP checks v1/v2c default communities, and in a range
+  scan only on hosts that answered the TCP liveness probe.
 - New detections of an existing handler type (paths, parameters, credential lists, string patterns)
   are pure config; a genuinely new vulnerability class needs a new handler in `checks/engine.py`.
 
@@ -1033,21 +1171,24 @@ Direct mapping from the PRD to the components that satisfy it.
 
 | Req | Description | Delivered by |
 |---|---|---|
-| **FR-1** | Network discovery | Recon Agent + `tools/network.py` |
-| **FR-2** | Web surface enumeration | Web Agent + `tools/web.py` |
-| **FR-3** | Binary analysis | Binary Agent + `tools/binary.py` |
+| **FR-1** | Network discovery | Recon Agent + `tools.py` (connect scan, liveness) + `netservices.py` |
+| **FR-2** | Web surface enumeration | Web Agent + `checks/engine.py` |
+| **FR-3** | Binary analysis | Binary Agent + `checks/engine.py` |
 | **FR-4** | Multi-agent coordination | Blackboard + Orchestrator task queue (dedupe + handoff) |
 | **FR-5** | PTES phase mapping | PTES router; `ptes_phase` on every task/finding/event |
 | **FR-6** | Verify, don't just flag | Verification Agent + finding lifecycle state machine |
 | **FR-7** | Report + API + README | Reporting Agent, FastAPI, this document |
 | **B-1** | Capture planted flags | Verification Agent flag check + attack-graph terminal nodes |
-| **B-2** | Chain to crown jewel | `blackboard/attack_graph.py` path search |
+| **B-2** | Chain to crown jewel | `attack_graph.py` path search |
 | **B-3** | Plain-English fixes | Reporting Agent generates a `fix` per finding |
 | **B-4** | Add checks/agents by config | `config/checks.yaml` + `config/agents.yaml` |
 | **B-5** | Live dashboard | `/events` SSE + `dashboard/` |
 | **E-1** | Hypothesis-driven threat modeling | `reasoning/hypothesis.py` + boost-aware `heuristic.prioritize` + `/hypotheses` |
 | **E-2** | OS fingerprinting per host | `osfp.py` (TTL + ports + MAC), surfaced on every network asset |
 | **E-3** | Visual network discovery | `netdiscover.py` + `/discover` page + `/network/*` |
+| **E-4** | Network-service vulnerability detection | `netservices.py` + `vulndb.py` + the `net-*` checks (version → CVE, unauthenticated exposure, TLS, SMB, SNMP) |
+| **E-5** | Extended web checks | `web-security-headers`, `web-insecure-cookies`, `web-cors-misconfig`, `web-http-methods`, `web-open-redirect`, `web-backup-files` |
+| **E-6** | Browser-driven, preemptible runs | `POST /run` · `POST /run/stop` · `GET /run/status` + dashboard Run / Re-scan / Stop |
 
 ---
 
@@ -1071,7 +1212,7 @@ so those constraints are structural, not optional:
 
 ## Project status
 
-A **working reference implementation** is in this repository and passes its test suite (16 tests,
+A **working reference implementation** is in this repository and passes its test suite (45 tests,
 including an end-to-end run against the bundled lab). It implements the full architecture above:
 
 - [x] **Spine** — scope loader, Scope Guard, blackboard store, autonomous orchestrator loop.
@@ -1081,6 +1222,9 @@ including an end-to-end run against the bundled lab). It implements the full arc
 - [x] **Chaining & report** — attack graph, flag capture, PTES report (md/html/json), plain-English fixes.
 - [x] **Threat modeling** — hypothesis-driven Phase 3: confidence-scored predictions that boost the highest-yield checks first and validate on confirmed evidence.
 - [x] **Discovery & OS** — visual LAN host-discovery page and privilege-free OS fingerprinting on every host.
+- [x] **Network vulnerabilities** — version → CVE correlation (offline), unauthenticated-service, TLS, SMBv1 / SMB-signing, and SNMP default-community checks on every open port.
+- [x] **Web depth** — security headers, cookie flags, CORS, dangerous HTTP methods, open redirects, and backup/secret files, with catch-all-aware path checks.
+- [x] **Run control** — calibrate the scope and run from the browser; Re-scan preempts a running scan; range scans are liveness-gated.
 - [x] **Polish** — live dashboard, config-driven checks, Docker Compose, self-scoring harness.
 
 **Reference-implementation notes.** The engine is pure-Python on the standard library (sockets,
@@ -1104,6 +1248,10 @@ to localhost only, so the whole thing is runnable and authorized by construction
 - **Crown jewel** — the most protected/high-value host, usually reachable only by chaining findings.
 - **Scope Guard** — the mandatory policy chokepoint that enforces default-deny, in-scope,
   non-destructive, rate-limited actions.
+- **Version-based detection** — inferring a known CVE from the product and version a service
+  advertises, rather than by exploiting it.
+- **Catch-all page** — a response a server returns for *any* path (an SPA shell, a blanket 403);
+  checks compare against it so it is never mistaken for an exposed resource.
 
 ---
 

@@ -12,7 +12,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from nighttrace import attack_graph
+from nighttrace import attack_graph, tools
 from nighttrace.agents import BinaryAgent, ReconAgent, VerifierAgent, WebAgent
 from nighttrace.blackboard import Blackboard
 from nighttrace.checks import CheckEngine
@@ -89,6 +89,14 @@ class Orchestrator:
             for host in self.config.scope.hosts:
                 self.bb.enqueue_task(type="recon", ptes=Ptes.INTEL_GATHERING.value,
                                      target={"host": host}, dedupe_key=f"recon:host:{host}")
+                if "web" in surfaces:
+                    # If specific HTTP(S) ports were configured in scope, seed web directly so
+                    # a slow LAN connect scan does not silently prevent the web audit
+                    for port in (self.config.scope.ports or []):
+                        if port in tools.HTTP_PORTS or port in tools.HTTPS_PORTS:
+                            self.bb.enqueue_task(type="web", ptes=Ptes.VULN_ANALYSIS.value,
+                                                 target={"host": host, "port": port},
+                                                 dedupe_key=f"web:{host}:{port}")
             for net in self.config.scope.networks:
                 self.bb.enqueue_task(type="recon", ptes=Ptes.INTEL_GATHERING.value,
                                      target={"network": net}, dedupe_key=f"recon:net:{net}")
