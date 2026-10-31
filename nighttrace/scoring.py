@@ -69,9 +69,18 @@ def compute(bb: Blackboard, ground_truth_path: str) -> dict:
     stray = int(safety.get("stray_probe_attempts", 0))
     runtime = float(bb.get_meta("duration_seconds", 0) or 0)
 
+    # Recall & Precision calculations
+    recall = findings_rate
+    true_positives = len(confirmed) - false
+    precision = true_positives / max(len(confirmed), 1)
+
     return {
         "coverage": {"value": round(coverage, 3), "grade": _grade(coverage, 0.7, 0.9),
                      "detail": f"{cov_hits}/{len(planted_services)} planted services found"},
+        "recall": {"value": round(recall, 3), "grade": _grade(recall, 0.6, 0.85),
+                   "detail": f"{matched}/{len(planted_weaknesses)} planted weaknesses confirmed (Recall: {round(recall * 100, 1)}%)"},
+        "precision": {"value": round(precision, 3), "grade": _grade(precision, 0.7, 0.9),
+                      "detail": f"{true_positives}/{max(len(confirmed), 1)} true findings (Precision: {round(precision * 100, 1)}%)"},
         "findings": {"value": round(findings_rate, 3), "grade": _grade(findings_rate, 0.6, 0.85),
                      "detail": f"{matched}/{len(planted_weaknesses)} planted weaknesses confirmed"},
         "verified": {"value": round(verified_rate, 3), "grade": _grade(verified_rate, 0.5, 1.0),

@@ -10,3 +10,5 @@ env/
 reports/
 targets/bin/
 .DS_Store
+.nighttrace-lab-staging/
+testing1/

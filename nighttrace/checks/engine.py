@@ -233,6 +233,15 @@ class CheckEngine:
             if t not in seen:
                 seen.add(t)
                 res.append(t)
+
+        # Rank candidates by Bayesian vulnerability probability so high-yield parameters run first
+        try:
+            from nighttrace.reasoning.classifier import default_classifier
+            check_id = check.get("id") or check.get("probe", {}).get("type", "")
+            res = default_classifier.rank_candidates(check_id, res)
+        except Exception:
+            pass
+
         return res[:15]
 
     def _probe_http_reflected_input(self, check, target, guard) -> list[ProbeOutcome]:

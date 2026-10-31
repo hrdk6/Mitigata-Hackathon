@@ -53,7 +53,7 @@ def main() -> int:
         orch = Orchestrator(config, checks, blackboard=bb)
         threading.Thread(target=orch.run, daemon=True).start()
         print(f"[demo] live dashboard: http://localhost:{args.api_port}/  (binding {args.api_host})")
-        uvicorn.run(create_app(bb, config), host=args.api_host, port=args.api_port, log_level="warning")
+        uvicorn.run(create_app(bb, config, checks), host=args.api_host, port=args.api_port, log_level="warning")
         return 0
 
     orch = Orchestrator(config, checks)
