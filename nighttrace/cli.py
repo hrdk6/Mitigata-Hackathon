@@ -15,12 +15,24 @@ from pathlib import Path
 
 from nighttrace import reporter, scoring
 from nighttrace.blackboard import Blackboard
-from nighttrace.config import Config, load_checks, load_scope
+from nighttrace.config import Config, apply_urls, config_from_urls, load_checks, load_scope
 from nighttrace.orchestrator import Orchestrator
 
 
+DEFAULT_SCOPE = "config/scope.yaml"
+
+
 def _load(args) -> tuple:
-    config = load_scope(args.scope)
+    urls = getattr(args, "url", None) or []
+    if urls and not args.scope:
+        # Bare --url: scan exactly the given website(s), nothing else.
+        config = config_from_urls(urls)
+    else:
+        # No --url, or an explicit --scope to combine with: load the scope file
+        # (the default when none was named) and fold any --url targets into it.
+        config = load_scope(args.scope or DEFAULT_SCOPE)
+        if urls:
+            config = apply_urls(config, urls)
     checks = load_checks(args.checks) if args.checks and Path(args.checks).is_file() else []
     return config, checks
 
@@ -87,18 +99,27 @@ def cmd_serve(args) -> int:
 
     from nighttrace.api import create_app
     bb = Blackboard()
+    urls = getattr(args, "url", None) or []
+    scope_path = args.scope or DEFAULT_SCOPE
     # Bring the dashboard up around the calibrated scope. If a runnable scope
     # already exists, auto-start the engagement; otherwise come up idle so the
     # scope can be calibrated from the UI and started with the Run button.
-    try:
-        config = load_scope(args.scope)
+    if urls and not args.scope:  # bare --url: start straight from the website(s)
+        config = config_from_urls(urls)
         autostart = True
-        print(f"\n  scope loaded from {args.scope} — starting engagement '{config.engagement}' (tier {config.tier})")
-    except (ValueError, FileNotFoundError) as exc:
-        config = Config()
-        autostart = False
-        print(f"\n  no runnable scope at {args.scope} yet ({exc})")
-        print(f"  calibrate it at http://{args.host}:{args.port}/scope-editor, then press Run")
+        print(f"\n  starting from --url target(s): {', '.join(urls)} (tier {config.tier})")
+    else:
+        try:
+            config = load_scope(scope_path)
+            if urls:
+                config = apply_urls(config, urls)
+            autostart = True
+            print(f"\n  scope loaded from {scope_path} — starting engagement '{config.engagement}' (tier {config.tier})")
+        except (ValueError, FileNotFoundError) as exc:
+            config = Config()
+            autostart = False
+            print(f"\n  no runnable scope at {scope_path} yet ({exc})")
+            print(f"  calibrate it at http://{args.host}:{args.port}/scope-editor, then press Run")
 
     checks = load_checks(args.checks) if Path(args.checks).is_file() else []
     app = create_app(bb, config, checks=checks, autostart=autostart)
@@ -114,7 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def common(sp):
-        sp.add_argument("--scope", default="config/scope.yaml", help="scope file (YAML or JSON)")
+        sp.add_argument("--scope", default=None,
+                        help="scope file (YAML or JSON) [default: config/scope.yaml]")
+        sp.add_argument("--url", action="append", metavar="URL",
+                        help="website target, e.g. https://example.com (repeatable). "
+                             "Alone, scans just the URL(s); with --scope, adds to that scope")
         sp.add_argument("--checks", default="config/checks.yaml", help="declarative checks file")
         sp.add_argument("--ground-truth", default=None, help="ground-truth file for self-scoring")
 

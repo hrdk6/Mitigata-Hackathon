@@ -4,6 +4,9 @@ engagement: "hackathon-lab"
 tier: breach                 # recon | breach | deep   (score multiplier 1.0x / 1.3x / 1.6x)
 
 scope:
+  urls:                        # website targets — scheme + port + path honored as given
+    - https://app.example.com
+    - http://10.10.7.10:8080/portal
   networks:
     - 10.10.7.0/24
   hosts:

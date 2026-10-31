@@ -24,7 +24,7 @@
 
 <div class="wrap">
   <div class="page-intro">
-    <div><div class="eyebrow">Pre-engagement</div><h2>Calibrate the assessment boundary.</h2><p>Set the exact networks, hosts, ports, and binaries NightTrace is allowed to examine. The Scope Guard enforces this configuration at runtime.</p></div>
+    <div><div class="eyebrow">Pre-engagement</div><h2>Calibrate the assessment boundary.</h2><p>Set the exact website URLs, networks, hosts, ports, and binaries NightTrace is allowed to examine. The Scope Guard enforces this configuration at runtime.</p></div>
     <span class="step">01 · define scope</span>
   </div>
   <div class="panel">
@@ -43,6 +43,10 @@
         </select>
       </div>
 
+      <div class="full">
+        <label for="urls">Website URLs <span class="sub">— one per line, e.g. https://example.com or http://10.0.0.5:8080/app</span></label>
+        <textarea id="urls" placeholder="https://example.com"></textarea>
+      </div>
       <div class="full">
         <label for="networks">Networks <span class="sub">— one CIDR per line, e.g. 192.168.60.0/24</span></label>
         <textarea id="networks" placeholder="192.168.60.0/24"></textarea>
@@ -115,6 +119,7 @@ async function load(){
     const s = d.scope || {}; const sc = s.scope || {}; const lim = s.limits || {};
     $('engagement').value = s.engagement || '';
     $('tier').value = s.tier || 'breach';
+    $('urls').value = toLines(sc.urls);
     $('networks').value = toLines(sc.networks);
     $('hosts').value = toLines(sc.hosts);
     $('exclude').value = toLines(sc.exclude);
@@ -133,6 +138,7 @@ async function save(){
   const body = {
     engagement: $('engagement').value.trim(),
     tier: $('tier').value,
+    urls: fromLines($('urls').value),
     networks: fromLines($('networks').value),
     hosts: fromLines($('hosts').value),
     exclude: fromLines($('exclude').value),

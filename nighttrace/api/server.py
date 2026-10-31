@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from nighttrace import attack_graph, netdiscover, reporter, scoring
 from nighttrace.blackboard import Blackboard
-from nighttrace.config import TIERS, Config, load_checks, load_scope
+from nighttrace.config import TIERS, Config, load_checks, load_scope, parse_web_target
 from nighttrace.models import now_iso
 
 _DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"
@@ -186,7 +186,7 @@ def create_app(bb: Blackboard, config: Config, checks: list[dict] | None = None,
             return {"status": "running", "preempted": preempted,
                     "engagement": cfg.engagement, "tier": cfg.tier,
                     "targets": {"networks": cfg.scope.networks, "hosts": cfg.scope.hosts,
-                                "binaries": cfg.scope.binaries}}
+                                "urls": cfg.scope.urls, "binaries": cfg.scope.binaries}}
 
     @app.post("/run/stop")
     def run_stop() -> dict:
@@ -254,7 +254,7 @@ def create_app(bb: Blackboard, config: Config, checks: list[dict] | None = None,
                 return {"exists": True, "path": str(_SCOPE_FILE), "error": str(exc)}
         return {"exists": False, "path": str(_SCOPE_FILE), "scope": {
             "engagement": cfg.engagement, "tier": cfg.tier,
-            "scope": {"networks": [], "hosts": [], "binaries": [], "exclude": [], "ports": []},
+            "scope": {"networks": [], "hosts": [], "urls": [], "binaries": [], "exclude": [], "ports": []},
             "limits": {"max_runtime_minutes": cfg.limits.max_runtime_minutes,
                        "rate_limit_pps": cfg.limits.rate_limit_pps, "destructive": False},
             "flags": {"pattern": cfg.flag_pattern}}}
@@ -273,11 +273,17 @@ def create_app(bb: Blackboard, config: Config, checks: list[dict] | None = None,
 
         networks, hosts = _clean(payload.get("networks")), _clean(payload.get("hosts"))
         binaries, exclude = _clean(payload.get("binaries")), _clean(payload.get("exclude"))
+        urls = _clean(payload.get("urls"))
         for n in networks:
             try:
                 ipaddress.ip_network(n, strict=False)
             except ValueError:
                 errors.append(f"invalid network CIDR: {n}")
+        for u in urls:
+            try:
+                parse_web_target(u)
+            except ValueError as exc:
+                errors.append(str(exc))
 
         tier = str(payload.get("tier", "breach")).lower()
         if tier not in TIERS:
@@ -291,8 +297,8 @@ def create_app(bb: Blackboard, config: Config, checks: list[dict] | None = None,
             except (TypeError, ValueError):
                 errors.append(f"invalid port: {p}")
 
-        if not (networks or hosts or binaries):
-            errors.append("scope is empty — add at least one network, host, or binary")
+        if not (networks or hosts or binaries or urls):
+            errors.append("scope is empty — add at least one URL, network, host, or binary")
 
         try:
             mrt = float(payload.get("max_runtime_minutes", 20))
@@ -313,7 +319,7 @@ def create_app(bb: Blackboard, config: Config, checks: list[dict] | None = None,
         doc = {
             "engagement": str(payload.get("engagement") or "engagement"),
             "tier": tier,
-            "scope": {"networks": networks, "hosts": hosts, "binaries": binaries,
+            "scope": {"networks": networks, "hosts": hosts, "urls": urls, "binaries": binaries,
                       "exclude": exclude, "ports": ports},
             "limits": {"max_runtime_minutes": mrt, "rate_limit_pps": rpp, "destructive": False},
             "flags": {"pattern": state["config"].flag_pattern},

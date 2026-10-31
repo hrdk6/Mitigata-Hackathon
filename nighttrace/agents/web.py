@@ -19,13 +19,30 @@ _LINK_RE = re.compile(r'(?:href|src|action)=["\']([^"\'#]+)', re.I)
 _LOGIN_RE = re.compile(r'/(login|admin|signin|sign-in|wp-admin|portal|dashboard)\b', re.I)
 
 
+def _origin_key(url: str) -> tuple[str, int] | None:
+    """(hostname, effective-port) for same-origin crawl scoping, with the
+    default port folded in so ``http://host`` and ``http://host:80`` match."""
+    pu = urlparse(url)
+    if pu.scheme not in ("http", "https"):
+        return None
+    try:
+        port = pu.port or (443 if pu.scheme == "https" else 80)
+    except ValueError:
+        return None
+    if not pu.hostname:
+        return None
+    return (pu.hostname, port)
+
+
 class WebAgent(Agent):
     name = "web"
 
     def handle(self, task: dict) -> AgentResult:
         t = task["target"]
         host, port = t["host"], t["port"]
-        base = tools.base_url_for(host, port)
+        # A URL-seeded task carries the exact base (scheme + port + sub-path) the
+        # user gave; otherwise derive it from the port as usual.
+        base = t.get("base_url") or tools.base_url_for(host, port, t.get("scheme"))
         res = AgentResult()
 
         root = tools.http_request(self.guard, base + "/")
@@ -71,11 +88,18 @@ class WebAgent(Agent):
         return res
 
     def _crawl(self, base: str) -> list[str]:
-        host = urlparse(base).netloc
+        origin = _origin_key(base)  # stay on the same host:port we were pointed at
+        start = base if base.endswith("/") else base + "/"
         max_pages = self.config.limits.max_crawl_pages
         seen: set[str] = set()
         ordered: list[str] = []
-        queue = [base + "/"]
+        queue = [start]
+
+        def _consider(nxt: str) -> None:
+            nxt = nxt.split("#")[0]
+            if _origin_key(nxt) == origin and nxt not in seen and nxt not in queue:
+                queue.append(nxt)
+
         while queue and len(ordered) < max_pages:
             url = queue.pop(0)
             if url in seen:
@@ -89,10 +113,7 @@ class WebAgent(Agent):
             # Follow in-scope redirects from Location header (301/302/307/308)
             loc = (resp.get("headers", {}) or {}).get("location")
             if loc:
-                nxt = urljoin(url, loc).split("#")[0]
-                pu = urlparse(nxt)
-                if pu.scheme in ("http", "https") and pu.netloc == host and nxt not in seen and nxt not in queue:
-                    queue.append(nxt)
+                _consider(urljoin(url, loc))
 
             body = resp.get("body", "")
             for raw_href in _LINK_RE.findall(body):
@@ -103,10 +124,7 @@ class WebAgent(Agent):
                 # Skip heavy downloads
                 if "dl=" in href or any(href.lower().endswith(ext) for ext in (".log", ".iso", ".zip", ".tar", ".gz", ".7z", ".bin")):
                     continue
-                nxt = urljoin(url, href).split("#")[0]
-                pu = urlparse(nxt)
-                if pu.scheme in ("http", "https") and pu.netloc == host and nxt not in seen and nxt not in queue:
-                    queue.append(nxt)
+                _consider(urljoin(url, href))
 
         return ordered
 

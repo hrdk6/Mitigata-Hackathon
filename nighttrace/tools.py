@@ -226,6 +226,6 @@ def read_binary(guard: ScopeGuard, path: str, max_bytes: int = 20_000_000) -> by
         return None
 
 
-def base_url_for(host: str, port: int) -> str:
-    scheme = "https" if port in HTTPS_PORTS else "http"
+def base_url_for(host: str, port: int, scheme: str | None = None) -> str:
+    scheme = scheme or ("https" if port in HTTPS_PORTS else "http")
     return f"{scheme}://{host}:{port}"
