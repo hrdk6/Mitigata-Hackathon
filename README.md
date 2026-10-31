@@ -34,7 +34,9 @@ writes one clean report — following the **PTES** methodology, from a single co
 - [Reliability & scale](#reliability--scale)
 - [Safety layer: the Scope Guard](#safety-layer-the-scope-guard)
 - [Scoped tool layer](#scoped-tool-layer)
+- [Network discovery & OS fingerprinting](#network-discovery--os-fingerprinting)
 - [PTES mapping](#ptes-mapping)
+- [Hypothesis-driven threat modeling](#hypothesis-driven-threat-modeling)
 - [Finding lifecycle & verification](#finding-lifecycle--verification)
 - [Attack-path chaining & flag capture](#attack-path-chaining--flag-capture)
 - [Data model](#data-model)
@@ -82,6 +84,9 @@ autonomously.
 | Capability | What it means |
 |---|---|
 | **Discover** | Sweeps the in-scope range for live hosts, open ports, and services. |
+| **Map the network visually** | A discovery page lists every live host on the WiFi/LAN — IP, hostname, MAC, open ports — so you can tick targets and build a scope in a click. |
+| **Fingerprint the OS** | Infers each host's OS (Windows / Linux / macOS / iOS / device) from TTL, port signature, and MAC — no admin rights — to steer method choice. |
+| **Model threats up front** | Formulates confidence-scored hypotheses about the most frequently-appearing weaknesses the moment a signal appears, and concentrates the agents on them first. |
 | **Cover all three surfaces** | Network, web, **and** binary analysis — not just one. |
 | **Coordinate** | Agents write to a shared blackboard and hand work to each other; no duplicated effort. |
 | **Verify** | Every weakness is *proven* with captured evidence before it counts as a finding. |
@@ -216,8 +221,8 @@ and one safety layer.
 
 | Agent | Responsibility | Primary tools | Default PTES phase |
 |---|---|---|---|
-| **Orchestrator** | Plans the engagement, dispatches & dedupes tasks, enforces the time/rate budget, tags PTES phases, decides when the run is complete, triggers reporting. | LangGraph control loop | Threat Modeling |
-| **Recon Agent** | Finds live hosts, open ports, services, and versions across the in-scope range; seeds the blackboard with assets. | `nmap`, `masscan` | Intelligence Gathering |
+| **Orchestrator** | Plans the engagement, dispatches & dedupes tasks, enforces the time/rate budget, tags PTES phases, **formulates threat-model hypotheses and boosts the work that chases them first**, decides when the run is complete, triggers reporting. | LangGraph control loop | Threat Modeling |
+| **Recon Agent** | Finds live hosts, open ports, services, and versions across the in-scope range, **plus a best-effort OS fingerprint per host**; seeds the blackboard with assets. | `nmap`, `masscan` | Intelligence Gathering |
 | **Web Agent** | Crawls web apps, enumerates endpoints (`/login`, `/admin`, …), flags common issues (reflected input, default creds, exposed files, injection indicators). | Katana, OWASP ZAP, HTTP client | Vulnerability Analysis |
 | **Binary Agent** | Statically analyses provided binaries for hard-coded secrets, unsafe functions (`gets`, `strcpy`, `system`), missing mitigations, weak crypto. | Ghidra (headless), radare2, angr | Vulnerability Analysis |
 | **Exploitation & Verification Agent** | Takes *suspected* findings and **proves** them with a safe, non-destructive action (log in with the default password, send a marked payload, read a flag). Promotes `Suspected → Confirmed` with captured evidence. | Scoped credential / payload probes | Exploitation |
@@ -403,6 +408,36 @@ config** (see [Extensibility](#extensibility-add-checks-and-agents-by-config)).
 
 ---
 
+## Network discovery & OS fingerprinting
+
+Before you have a scope, you need to know what is on the network the organizers put you on.
+NightTrace ships a **host-discovery page** (served at `/discover`) and a matching API that sweep the
+local subnet **non-destructively and without admin rights** — ordinary TCP connect probes plus the
+OS ARP cache, never raw sockets or ICMP floods. It is **LAN-only by construction**: a public range is
+refused.
+
+For every live host it reports **IP, hostname, MAC, and open ports**, then **fingerprints the OS** —
+Windows / Linux / macOS / iOS / network-device — with a confidence score and the reasons behind it.
+The guess fuses four signals already gathered during a normal scan:
+
+- **TTL** of one echo (128 → Windows, 64 → Unix-like, 255 → router/printer),
+- the **open-port signature** (135/139/445/3389 → Windows, 62078 → Apple mobile, …),
+- the **HTTP `Server` header** (IIS vs Apache-on-Ubuntu, …),
+- the **MAC** (locally-administered bit → a randomized/mobile address).
+
+Why it matters: the OS steers method selection — the engine (and any downstream model) can prefer
+SMB/RDP tactics on Windows and SSH/web tactics on Unix instead of trying everything blindly. The OS
+rides along on every network asset (`os`, `os_family`, `os_confidence`, `os_reasons`) and is visible
+in `/targets`, the report, and the dashboard.
+
+Tick the hosts you are authorized to assess and the page writes a ready-to-run `config/scope.yaml`.
+Discovery is the one step that runs *before* the Scope Guard, because its whole job is to help you
+draw the scope the Guard then enforces.
+
+> `nighttrace/netdiscover.py` (sweep + scope writer) · `nighttrace/osfp.py` (fingerprint) · `dashboard/discover.html` (the page).
+
+---
+
 ## PTES mapping
 
 Every step NightTrace takes is tagged with its **PTES** (Penetration Testing Execution Standard)
@@ -413,7 +448,7 @@ human assessor and maps machine actions onto an industry-standard methodology.
 flowchart LR
     P1["1 · Pre-engagement<br/>scope.yaml, limits, tier"]
     P2["2 · Intelligence Gathering<br/>Recon Agent"]
-    P3["3 · Threat Modeling<br/>Orchestrator prioritises"]
+    P3["3 · Threat Modeling<br/>hypotheses + prioritisation"]
     P4["4 · Vulnerability Analysis<br/>Web + Binary Agents"]
     P5["5 · Exploitation<br/>Verification Agent proves it"]
     P6["6 · Post-Exploitation<br/>chaining · pivot · flags"]
@@ -425,8 +460,8 @@ flowchart LR
 | PTES phase | NightTrace activity | Owning component |
 |---|---|---|
 | Pre-engagement | Load & validate scope, set tier/limits, arm Scope Guard | Orchestrator + Scope Guard |
-| Intelligence Gathering | Host/port/service/version discovery | Recon Agent |
-| Threat Modeling | Prioritise high-value targets & likely weaknesses | Orchestrator (planning model) |
+| Intelligence Gathering | Host/port/service/version discovery + OS fingerprint | Recon Agent |
+| Threat Modeling | Formulate confidence-scored hypotheses on likely weaknesses; boost their checks to the front of the queue | Orchestrator + `reasoning/hypothesis.py` |
 | Vulnerability Analysis | Enumerate web issues; analyse binaries | Web + Binary Agents |
 | Exploitation | Non-destructively prove each suspected weakness | Verification Agent |
 | Post-Exploitation | Chain findings, pivot, capture flags (no damage) | Verification Agent + Attack Graph |
@@ -434,6 +469,36 @@ flowchart LR
 
 The feedback arrow matters: reaching a new foothold (post-exploitation) **re-seeds discovery** on
 the newly reachable segment, so the loop deepens until the budget is spent.
+
+---
+
+## Hypothesis-driven threat modeling
+
+PTES Phase 3 is where NightTrace reasons *ahead* of itself. The moment a signal appears, it
+formulates a falsifiable **hypothesis** about the most frequently-appearing class of weakness for
+that signal — with a **confidence** drawn from how often the pattern shows up in real lab/pentest
+environments, and a **priority boost** that moves its checks to the front of the queue. The agents
+therefore concentrate on the high-yield, frequently-appearing weaknesses first, instead of treating
+every possibility equally.
+
+| Hypothesis | Raised when… | Confidence | Suggested checks |
+|---|---|---|---|
+| **Default Administrative Credentials** | a login portal (`/login`, `/admin`) is found | 90% | `web-default-credentials` |
+| **Exposed Version Control & Config Secrets** | an HTTP service is alive | 85% | `web-git-exposure`, `web-sensitive-paths`, `web-directory-listing` |
+| **Hardcoded Binary Secrets** | an executable binary is present | 88% | `bin-weak-strings` |
+| **Unsanitized Input Reflection** | query/search parameters are discovered | 82% | `web-reflected-input`, `web-sql-injection`, `web-path-traversal` |
+| **Cross-Surface Credential Reuse** | credentials leak in a binary or config | 92% | `web-default-credentials` |
+
+Each hypothesis has a lifecycle: **FORMULATED** when raised (a `threat_modeling` /
+`hypothesis_formulated` event), then **VALIDATED** the moment a finding it predicted is *confirmed
+with captured evidence* (an `exploitation` / `hypothesis_validated` event). A hypothesis is a
+prediction, never a claim — if the evidence never lands it simply stays formulated. That is what lets
+the engine prioritise aggressively while keeping the false-alarm rate at zero.
+
+The formulated and validated hypotheses stream into the live dashboard panel, the `/hypotheses`
+endpoint, and a dedicated **Threat modeling** section of `report.md` / `report.html`.
+
+> `nighttrace/reasoning/hypothesis.py` (templates + generation) · `reasoning/heuristic.py` (boost-aware queue ordering) · emitted by the recon / web / binary / verifier agents and recorded by the orchestrator.
 
 ---
 
@@ -576,6 +641,11 @@ GET  /attack-path                  # chained path(s) to flags / crown jewel
 GET  /report?format=md|html|json   # the full PTES report
 GET  /score?ground_truth=truth.yaml # self-grade vs planted ground truth (coverage, findings, …)
 GET  /events                       # Server-Sent Events: live agent activity (dashboard feed)
+GET  /hypotheses                   # threat-model hypotheses: formulated + validated
+GET  /discover                     # host-discovery page: live hosts on the WiFi/LAN
+GET  /network/interfaces           # detected local subnets (prefill the scan)
+POST /network/scan                 # non-destructive LAN sweep: live hosts, ports, OS guess
+POST /network/scope                # write config/scope.yaml from the hosts you pick
 ```
 
 ```jsonc
@@ -672,27 +742,31 @@ nighttrace/
 ├── config.py                # scope/checks/agents loader + difficulty tiers
 ├── models.py                # blackboard data types
 ├── blackboard.py            # shared SQLite store: assets, findings, tasks, events, edges
-├── orchestrator.py          # autonomous control loop (plan → dispatch → integrate → report)
-├── tools.py                 # scoped tool primitives (tcp connect scan, http, binary read)
+├── orchestrator.py          # autonomous control loop (plan → threat-model → dispatch → integrate → report)
+├── tools.py                 # scoped tool primitives (tcp connect scan, http, binary read, TTL ping)
+├── netdiscover.py           # LAN host discovery + scope writer (the /discover page)
+├── osfp.py                  # privilege-free OS fingerprinting (TTL + ports + MAC)
 ├── attack_graph.py          # cross-surface chaining + path search (B-2)
 ├── reporter.py              # PTES report: markdown / html / json (FR-7, B-3)
 ├── scoring.py               # self-score vs ground truth
 ├── safety/
 │   └── scope_guard.py       # default-deny allow/exclude, non-destructive, rate limit
 ├── agents/
-│   ├── recon.py             # FR-1  discovery + active HTTP detection
-│   ├── web.py               # FR-2  crawl + web checks
-│   ├── binary.py            # FR-3  static binary analysis
-│   └── verifier.py          # FR-6  proof-of-finding + B-1 flag capture
+│   ├── recon.py             # FR-1  discovery + active HTTP detection + OS fingerprint + hypotheses
+│   ├── web.py               # FR-2  crawl + web checks + hypotheses
+│   ├── binary.py            # FR-3  static binary analysis + hypotheses
+│   └── verifier.py          # FR-6  proof-of-finding + B-1 flag capture + hypothesis validation
 ├── checks/
 │   └── engine.py            # declarative probe/verify handlers (B-4)
 ├── reasoning/
-│   ├── heuristic.py         # deterministic planner + scorer (default)
+│   ├── hypothesis.py        # hypothesis-driven threat modeling (PTES phase 3)
+│   ├── heuristic.py         # deterministic planner + boost-aware scorer (default)
 │   └── llm.py               # optional Claude narrative layer
 ├── api/
-│   └── server.py            # FastAPI: /targets /findings /attack-path /report /score /events
+│   └── server.py            # FastAPI: /targets /findings /attack-path /report /score /events /hypotheses /discover /network/*
 └── dashboard/
-    └── index.html           # B-5 live dashboard
+    ├── index.html           # B-5 live dashboard (incl. threat-model hypotheses panel)
+    └── discover.html        # network host-discovery page
 config/                      # scope.example.yaml · scope.demo.yaml · checks.yaml · agents.yaml
 targets/                     # bundled intentionally-vulnerable lab (localhost only)
 ├── demo_lab.py              # the target app
@@ -901,6 +975,9 @@ Direct mapping from the PRD to the components that satisfy it.
 | **B-3** | Plain-English fixes | Reporting Agent generates a `fix` per finding |
 | **B-4** | Add checks/agents by config | `config/checks.yaml` + `config/agents.yaml` |
 | **B-5** | Live dashboard | `/events` SSE + `dashboard/` |
+| **E-1** | Hypothesis-driven threat modeling | `reasoning/hypothesis.py` + boost-aware `heuristic.prioritize` + `/hypotheses` |
+| **E-2** | OS fingerprinting per host | `osfp.py` (TTL + ports + MAC), surfaced on every network asset |
+| **E-3** | Visual network discovery | `netdiscover.py` + `/discover` page + `/network/*` |
 
 ---
 
@@ -924,7 +1001,7 @@ so those constraints are structural, not optional:
 
 ## Project status
 
-A **working reference implementation** is in this repository and passes its test suite (12 tests,
+A **working reference implementation** is in this repository and passes its test suite (16 tests,
 including an end-to-end run against the bundled lab). It implements the full architecture above:
 
 - [x] **Spine** — scope loader, Scope Guard, blackboard store, autonomous orchestrator loop.
@@ -932,6 +1009,8 @@ including an end-to-end run against the bundled lab). It implements the full arc
 - [x] **Web + Binary** — both surfaces producing findings via the declarative check engine.
 - [x] **Verification** — the `Suspected → Confirmed` loop with captured evidence.
 - [x] **Chaining & report** — attack graph, flag capture, PTES report (md/html/json), plain-English fixes.
+- [x] **Threat modeling** — hypothesis-driven Phase 3: confidence-scored predictions that boost the highest-yield checks first and validate on confirmed evidence.
+- [x] **Discovery & OS** — visual LAN host-discovery page and privilege-free OS fingerprinting on every host.
 - [x] **Polish** — live dashboard, config-driven checks, Docker Compose, self-scoring harness.
 
 **Reference-implementation notes.** The engine is pure-Python on the standard library (sockets,
