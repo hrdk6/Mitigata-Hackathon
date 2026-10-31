@@ -28,6 +28,17 @@
   .f{padding:8px 10px;margin:6px 0;border:1px solid var(--line);border-left:4px solid var(--mut);border-radius:6px}
   .f.high,.f.critical{border-left-color:var(--high)} .f.medium{border-left-color:var(--med)} .f.low{border-left-color:var(--low)}
   .f .t{font-weight:600} .f .m{font-size:12px;color:var(--mut)}
+  .evidence{margin-top:9px;border-top:1px solid var(--line);padding-top:7px}
+  .evidence summary{cursor:pointer;color:var(--fg);font-size:12px;font-weight:600}
+  .evidence summary:hover{color:#c9b6ff}
+  .evidence-note{margin:6px 0;color:var(--mut);font-size:12px}
+  .evidence-list{list-style:none;margin:7px 0;padding:0}
+  .evidence-item{margin:6px 0;padding:7px 8px;background:#0d1117;border:1px solid #262c36;border-radius:5px}
+  .evidence-kind{display:inline-block;padding:1px 5px;border-radius:4px;background:#30363d;color:#e6edf3;font-size:10px;font-weight:700;text-transform:uppercase}
+  .evidence-time{margin-left:6px;color:var(--mut);font-size:10px}
+  .evidence-content{margin:5px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;color:#c9d1d9}
+  .evidence-link{display:inline-block;margin-top:3px;color:#c9b6ff;font-size:11px}
+  .evidence-empty{margin-top:7px;color:var(--med);font-size:12px}
   .badge{font-size:11px;padding:1px 6px;border-radius:4px;background:#21262d;color:var(--fg)}
   .chain{font:13px/1.8 ui-monospace,monospace}
   .chain .node{background:#21262d;border:1px solid var(--line);border-radius:5px;padding:2px 7px}
@@ -89,7 +100,7 @@
   </div>
 
   <div class="panel">
-    <h2>Confirmed findings</h2>
+    <h2>Confirmed findings <span class="mut" style="text-transform:none;letter-spacing:0;font-weight:400">— expand a finding to inspect its proof</span></h2>
     <div id="findings"><span class="mut">none yet</span></div>
     <h2 style="margin-top:14px">Attack path</h2>
     <div class="chain" id="chain"><span class="mut">not assembled yet</span></div>
@@ -102,6 +113,7 @@ const PHASES = [["pre_engagement","Pre-engage"],["intelligence_gathering","Recon
   ["exploitation","Exploit"],["post_exploitation","Post-exploit"],["reporting","Report"]];
 let lastId = 0;
 const seenPhases = new Set();
+const openEvidence = new Set();
 const feed = document.getElementById('feed');
 
 function phaseBar(){
@@ -139,11 +151,7 @@ async function pollState(){
   if(f && f.findings){
     const stray = await j('/report');
     if(stray && stray.scope_safety) set('t-stray', stray.scope_safety.stray_probe_attempts||0);
-    document.getElementById('findings').innerHTML = f.findings.length ? f.findings.map(x=>
-      `<div class="f ${x.severity}"><span class="t">${escapeHtml(x.title)}</span>
-       <span class="badge">${x.severity.toUpperCase()}</span>
-       <div class="m">${x.surface} · ${x.asset_host||''}${x.asset_port?(':'+x.asset_port):''}</div></div>`).join('')
-      : '<span class="mut">none yet</span>';
+    renderFindings(f.findings);
   }
   const hy = await j('/hypotheses');
   if(hy && hy.formulated){
@@ -168,11 +176,68 @@ async function pollState(){
 function set(id,v){ document.getElementById(id).textContent = v; }
 function escapeHtml(s){ return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
+function safeSeverity(severity){
+  return ['info','low','medium','high','critical'].includes(severity) ? severity : 'info';
+}
+
+function evidenceTimestamp(value){
+  if(!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+}
+
+function evidenceMarkup(f){
+  const evidence = Array.isArray(f.evidence) ? f.evidence : [];
+  const key = encodeURIComponent(String(f.id ?? 'unknown'));
+  if(!evidence.length){
+    return `<div class="evidence-empty">No captured proof is available for this finding.</div>`;
+  }
+  const items = evidence.map(e => {
+    const kind = escapeHtml(e && e.kind ? e.kind : 'evidence');
+    const content = escapeHtml(e && e.content ? e.content : 'No content captured');
+    const captured = evidenceTimestamp(e && e.created);
+    return `<li class="evidence-item"><span class="evidence-kind">${kind}</span>`+
+      (captured ? `<span class="evidence-time">captured ${escapeHtml(captured)}</span>` : '')+
+      `<pre class="evidence-content">${content}</pre></li>`;
+  }).join('');
+  const proofWord = evidence.length === 1 ? 'item' : 'items';
+  return `<details class="evidence" data-evidence-finding-id="${key}"${openEvidence.has(key) ? ' open' : ''}>
+    <summary>Evidence — ${evidence.length} proof ${proofWord}</summary>
+    <p class="evidence-note">Detection signals and non-destructive verification output.</p>
+    <ul class="evidence-list">${items}</ul>
+    <a class="evidence-link" href="/findings/${key}" target="_blank" rel="noopener">View raw finding JSON</a>
+  </details>`;
+}
+
+function renderFindings(findings){
+  const panel = document.getElementById('findings');
+  if(!findings.length){
+    panel.innerHTML = '<span class="mut">none yet</span>';
+    return;
+  }
+  panel.innerHTML = findings.map(f => {
+    const severity = safeSeverity(f.severity);
+    const location = `${f.asset_host || ''}${f.asset_port ? ':'+f.asset_port : ''}`;
+    const description = f.description ? `<div class="m">${escapeHtml(f.description)}</div>` : '';
+    return `<div class="f ${severity}"><span class="t">${escapeHtml(f.title)}</span>
+      <span class="badge">${severity.toUpperCase()}</span>
+      <div class="m">${escapeHtml(f.surface || '')} · ${escapeHtml(location)}</div>
+      ${description}${evidenceMarkup(f)}</div>`;
+  }).join('');
+  panel.querySelectorAll('[data-evidence-finding-id]').forEach(details => {
+    details.addEventListener('toggle', () => {
+      const key = details.dataset.evidenceFindingId;
+      if(details.open) openEvidence.add(key); else openEvidence.delete(key);
+    });
+  });
+}
+
 // --- run control: scan whatever is calibrated in scope.yaml, from the UI ---
 let runBusy = false;   // suppress status polling while a start/stop request is mid-flight
 
 function resetView(){
   lastId = 0; feed.innerHTML = ''; seenPhases.clear(); phaseBar();
+  openEvidence.clear();
   ['t-assets','t-confirmed','t-suspected','t-refuted','t-stray'].forEach(id=>set(id,0));
   document.getElementById('findings').innerHTML = '<span class="mut">none yet</span>';
   document.getElementById('hyps').innerHTML = '<span class="mut">none yet — formulated as signals appear</span>';

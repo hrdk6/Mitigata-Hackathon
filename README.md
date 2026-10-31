@@ -771,6 +771,8 @@ GET  /web/scan/status              # dashboard target-scan state
 The dashboard's **Run scan** button calls `POST /run`. While a scan is running it becomes
 **Re-scan** — stop the current run and start over on the latest `scope.yaml` — and **Stop** aborts
 it. Each run writes into a fresh blackboard, so the view always shows exactly one engagement.
+Expand a confirmed finding in the dashboard to see its original detection signal and the
+non-destructive verification proof; the raw finding JSON remains one click away.
 
 ```jsonc
 // GET /targets/5/findings
@@ -781,10 +783,16 @@ it. Each run writes into a fresh blackboard, so the view always shows exactly on
       "id": 42,
       "title": "Default credentials on /admin",
       "surface": "web",
-      "ptes_phase": "exploitation",
+      "ptes": "exploitation",
       "status": "Confirmed",
       "severity": "high",
-      "evidence": ["HTTP 200 + session cookie as admin:admin"],
+      "evidence": [
+        {
+          "kind": "verification",
+          "content": "GET /admin with the captured session -> HTTP 200: authenticated access confirmed",
+          "created": "2026-11-01T12:00:00+00:00"
+        }
+      ],
       "fix": "Remove default accounts; enforce a strong password policy and account lockout."
     }
   ]
@@ -796,7 +804,7 @@ flowchart LR
     BB[("Blackboard")] --> API["FastAPI"]
     API -->|"/events (SSE)"| DASH["Dashboard"]
     DASH --> V1["agent activity timeline"]
-    DASH --> V2["findings by surface & severity"]
+    DASH --> V2["findings by surface, severity & expandable proof"]
     DASH --> V3["live attack graph"]
     DASH --> V4["PTES phase progress"]
 ```

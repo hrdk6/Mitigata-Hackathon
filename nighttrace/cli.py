@@ -39,6 +39,14 @@ def _print_summary(report: dict) -> None:
             if f.get("asset_port"):
                 loc += f":{f['asset_port']}"
             print(f"    [{f['severity'].upper():<8}] {f['title']}  @ {loc}")
+            evidence = f.get("evidence") or []
+            if evidence:
+                for item in evidence:
+                    kind = item.get("kind", "evidence")
+                    content = item.get("content", "")
+                    print(f"      Evidence [{kind}]: {content}")
+            else:
+                print("      Evidence: none captured")
     for p in report["attack_paths"]:
         chain = " -> ".join([p["steps"][0]["from"]] + [x["to"] for x in p["steps"]])
         print(f"\n  Attack path ({p['goal']}): {chain}")

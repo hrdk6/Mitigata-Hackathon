@@ -1,5 +1,5 @@
 engagement: mitigata-engagement
-tier: breach
+tier: deep
 scope:
   networks:
   - 192.168.60.139
@@ -7,9 +7,7 @@ scope:
   - 192.168.60.139
   binaries: []
   exclude: []
-  ports:
-  - 80
-  - 8833
+  ports: []
 limits:
   max_runtime_minutes: 20.0
   rate_limit_pps: 50
