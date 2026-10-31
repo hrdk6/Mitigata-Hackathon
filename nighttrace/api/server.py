@@ -8,14 +8,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
-from nighttrace import attack_graph, reporter, scoring
+from nighttrace import attack_graph, netdiscover, reporter, scoring
 from nighttrace.blackboard import Blackboard
 from nighttrace.config import Config
 
-_DASHBOARD = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
+_DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"
+_DASHBOARD = _DASHBOARD_DIR / "index.html"
+_DISCOVER = _DASHBOARD_DIR / "discover.html"
+_ROOT = Path(__file__).resolve().parent.parent.parent
+_CONFIG = _ROOT / "config"
 
 
 def create_app(bb: Blackboard, config: Config) -> FastAPI:
@@ -80,5 +84,49 @@ def create_app(bb: Blackboard, config: Config) -> FastAPI:
         if not Path(ground_truth).is_file():
             return JSONResponse({"error": f"ground-truth file not found: {ground_truth}"}, status_code=404)
         return scoring.compute(bb, ground_truth)
+
+    # -- network discovery (pre-engagement): find hosts on the local WiFi/LAN --
+    @app.get("/discover", response_class=HTMLResponse)
+    def discover_page() -> str:
+        try:
+            return _DISCOVER.read_text(encoding="utf-8")
+        except OSError:
+            return "<h1>NightTrace</h1><p>Discovery asset missing.</p>"
+
+    @app.get("/network/interfaces")
+    def network_interfaces() -> dict:
+        return {"networks": netdiscover.local_networks()}
+
+    @app.post("/network/scan")
+    def network_scan(payload: dict = Body(default={})):
+        cidr = (payload or {}).get("cidr")
+        if not cidr:
+            nets = netdiscover.local_networks()
+            if not nets:
+                return JSONResponse({"error": "could not detect a local network; pass a cidr"}, status_code=400)
+            cidr = nets[0]["cidr"]
+        try:
+            timeout = float((payload or {}).get("timeout", 0.3))
+            return netdiscover.scan_network(cidr, timeout=max(0.1, min(timeout, 2.0)))
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/network/scope")
+    def network_scope(payload: dict = Body(default={})):
+        payload = payload or {}
+        ips = [str(x).strip() for x in payload.get("ips", []) if str(x).strip()]
+        if not ips:
+            return JSONResponse({"error": "select at least one host"}, status_code=400)
+        _CONFIG.mkdir(parents=True, exist_ok=True)
+        dest = _CONFIG / "scope.yaml"
+        text = netdiscover.write_scope(
+            dest, ips,
+            cidr=payload.get("cidr"),
+            engagement=payload.get("engagement") or "hackathon-engagement",
+            tier=payload.get("tier") or "breach",
+            exclude=payload.get("exclude") or [],
+        )
+        return {"path": str(dest), "yaml": text,
+                "run": "python -m nighttrace run --scope config/scope.yaml --out reports"}
 
     return app
