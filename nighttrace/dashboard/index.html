@@ -35,13 +35,23 @@
   .phases{display:flex;flex-wrap:wrap;gap:6px}
   .ph{font-size:12px;padding:3px 9px;border-radius:14px;border:1px solid var(--line);color:var(--mut)}
   .ph.active{background:var(--accent);color:#fff;border-color:var(--accent)}
-  @media(max-width:820px){.wrap{grid-template-columns:1fr}.tiles{grid-column:auto;grid-template-columns:repeat(2,1fr)}}
+  .btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--fg);text-decoration:none;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s ease}
+  .btn:hover{background:#21262d;border-color:var(--accent);color:#fff}
+  .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn-primary:hover{background:#6a42b0}
+  .actions{margin-left:auto;display:flex;align-items:center;gap:8px}
+  @media(max-width:820px){.wrap{grid-template-columns:1fr}.tiles{grid-column:auto;grid-template-columns:repeat(2,1fr)}.actions{margin-left:0;width:100%;margin-top:8px}}
 </style>
 </head>
 <body>
 <header>
   <span class="dot"></span><h1>🌙 NightTrace</h1>
   <span class="mut" id="meta">connecting…</span>
+  <div class="actions">
+    <a href="/report?format=html" target="_blank" class="btn btn-primary" title="Open full visual HTML report in a new tab">📄 View Full Report</a>
+    <a href="/report?format=md" target="_blank" class="btn" title="View Markdown report">⬇ Markdown</a>
+    <a href="/report?format=json" target="_blank" class="btn" title="View raw JSON report">⬇ JSON</a>
+  </div>
 </header>
 <div class="wrap">
   <div class="tiles">

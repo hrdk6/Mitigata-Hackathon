@@ -30,6 +30,8 @@ def main() -> int:
     ap.add_argument("--serve", action="store_true", help="keep the live dashboard + API running")
     ap.add_argument("--lab-port", type=int, default=8008)
     ap.add_argument("--api-port", type=int, default=8000)
+    ap.add_argument("--api-host", default="127.0.0.1",
+                    help="bind address for the dashboard/API (use 0.0.0.0 in Docker)")
     args = ap.parse_args()
 
     make_sample_binary.make(ROOT / "targets" / "bin" / "auth_service")
@@ -50,8 +52,8 @@ def main() -> int:
         bb = Blackboard()
         orch = Orchestrator(config, checks, blackboard=bb)
         threading.Thread(target=orch.run, daemon=True).start()
-        print(f"[demo] live dashboard: http://127.0.0.1:{args.api_port}/")
-        uvicorn.run(create_app(bb, config), host="127.0.0.1", port=args.api_port, log_level="warning")
+        print(f"[demo] live dashboard: http://localhost:{args.api_port}/  (binding {args.api_host})")
+        uvicorn.run(create_app(bb, config), host=args.api_host, port=args.api_port, log_level="warning")
         return 0
 
     orch = Orchestrator(config, checks)
