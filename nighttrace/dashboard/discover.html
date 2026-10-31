@@ -5,63 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NightTrace — network discovery</title>
 <style>
-  :root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--fg:#e6edf3;--mut:#8b949e;--accent:#7E56C2;
-        --ok:#3fb950;--med:#e3853d;--hi:#f85149}
-  *{box-sizing:border-box}
-  body{margin:0;font:15px/1.5 system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--fg)}
-  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-  header h1{margin:0;font-size:20px}
-  .mut{color:var(--mut)}
-  a.back{margin-left:auto;color:var(--mut);text-decoration:none;font-size:13px}
-  a.back:hover{color:var(--fg)}
-  .wrap{max-width:1100px;margin:0 auto;padding:18px}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
-  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  label{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
-  input,select{background:#0d1117;border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:8px 10px;font:14px ui-monospace,Consolas,monospace}
-  input[type=text]{min-width:180px}
-  .btn{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border-radius:6px;border:1px solid var(--line);
-       background:var(--panel);color:var(--fg);text-decoration:none;font-size:14px;font-weight:600;cursor:pointer}
-  .btn:hover{background:#21262d;border-color:var(--accent);color:#fff}
-  .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
-  .btn-primary:hover{background:#6a42b0}
-  .btn:disabled{opacity:.5;cursor:not-allowed}
-  .hint{font-size:12.5px;color:var(--mut);margin-top:8px}
-  table{width:100%;border-collapse:collapse;font-size:14px}
-  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #21262d}
-  th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut)}
-  td.ip{font:14px ui-monospace,Consolas,monospace}
-  tr.self td{color:var(--mut)}
-  .tag{display:inline-block;font:12px ui-monospace,monospace;background:#21262d;border:1px solid var(--line);
-       border-radius:5px;padding:1px 7px;margin:2px 3px 2px 0}
-  .tag.svc{border-color:#3a2f52;color:#cdb8ff}
-  .os{display:inline-block;font-size:12.5px;font-weight:600;border-radius:5px;padding:1px 8px;border:1px solid var(--line)}
-  .os.windows{color:#79c0ff;border-color:#1f4d78;background:#0d2238}
-  .os.linux{color:#ffd37a;border-color:#5a4a1f;background:#2a2410}
-  .os.macos,.os.apple-mobile{color:#e6c3ff;border-color:#4a2f66;background:#241633}
-  .os.network-device{color:#7ee787;border-color:#1f5a2c;background:#0f2a16}
-  .os.unknown{color:var(--mut)}
-  .conf{font-size:11px;color:var(--mut);margin-left:4px}
-  .badge-self{font-size:11px;color:var(--accent);border:1px solid var(--accent);border-radius:10px;padding:1px 7px}
-  .count{font-size:26px;font-weight:700}
-  .spinner{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;
-           display:inline-block;animation:spin .8s linear infinite;vertical-align:-3px}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  pre{background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;font:13px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap}
-  .err{color:var(--hi)} .okmsg{color:var(--ok)}
-  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}
+  :root{--bg:#090b14;--panel:rgba(18,23,40,.82);--field:#090d19;--line:rgba(157,173,210,.16);--fg:#eef1ff;--mut:#9ca7c4;--accent:#9c7cff;--accent-2:#5de2cf;--ok:#65e3a1;--med:#ffb86a;--hi:#ff6d7a}
+  *{box-sizing:border-box}html{min-height:100%;background:#05060c}body{min-height:100vh;margin:0;font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--fg);background:radial-gradient(circle at 8% 0,rgba(116,80,217,.25),transparent 28rem),radial-gradient(circle at 92% 12%,rgba(41,190,174,.12),transparent 24rem),linear-gradient(135deg,#0b0e19,#080a13 60%,#05070e)}body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.18;background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);background-size:44px 44px;mask-image:linear-gradient(to bottom,black,transparent 74%)}
+  header,.wrap{position:relative;z-index:1}.topbar{min-height:74px;padding:12px clamp(18px,4vw,48px);display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line);background:rgba(7,9,17,.62);backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:11px}.brand-mark{display:grid;place-items:center;width:35px;height:35px;border:1px solid rgba(170,146,255,.55);border-radius:11px;background:linear-gradient(135deg,rgba(163,125,255,.25),rgba(93,226,207,.16));box-shadow:0 0 26px rgba(133,99,255,.22);color:#e6dcff;font-weight:900}.brand h1{margin:0;font-size:17px;letter-spacing:-.02em}.brand p{margin:1px 0 0;color:var(--mut);font-size:11px;letter-spacing:.07em;text-transform:uppercase}.mut{color:var(--mut)}.nav{margin-left:auto;display:flex;gap:7px}.nav a{padding:7px 10px;border:1px solid transparent;border-radius:8px;color:var(--mut);text-decoration:none;font-size:12px;font-weight:650;transition:.16s}.nav a:hover{border-color:var(--line);background:rgba(255,255,255,.045);color:#fff}
+  .wrap{max-width:1240px;margin:0 auto;padding:30px clamp(18px,4vw,48px) 44px}.page-intro{display:flex;align-items:end;justify-content:space-between;gap:20px;margin:0 0 18px}.eyebrow{display:flex;align-items:center;gap:7px;margin-bottom:6px;color:#bba9ff;font-size:10px;font-weight:800;letter-spacing:.13em;text-transform:uppercase}.eyebrow:before{content:"";width:20px;height:1px;background:currentColor}.page-intro h2{margin:0;font-size:clamp(25px,4vw,35px);letter-spacing:-.045em}.page-intro p{max-width:690px;margin:7px 0 0;color:#b4bfdb;font-size:13px}.step{padding:8px 11px;border:1px solid rgba(174,150,255,.28);border-radius:8px;background:rgba(133,99,255,.1);color:#d8cdfd;font:11px ui-monospace,SFMono-Regular,Consolas,monospace;white-space:nowrap}
+  .panel{border:1px solid var(--line);border-radius:15px;padding:21px;background:var(--panel);box-shadow:0 16px 42px rgba(0,0,0,.16);backdrop-filter:blur(14px);margin-bottom:16px}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}label{display:inline-block;margin-bottom:6px;color:#b9c3df;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.11em}input,select{border:1px solid var(--line);border-radius:9px;outline:0;background:var(--field);color:var(--fg);padding:10px 11px;font:13px ui-monospace,SFMono-Regular,Consolas,monospace;transition:border-color .16s,box-shadow .16s,background .16s}input:focus,select:focus{border-color:rgba(174,150,255,.68);background:#0d1020;box-shadow:0 0 0 3px rgba(156,124,255,.12)}input[type=text]{min-width:190px}.btn{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:8px 13px;border:1px solid var(--line);border-radius:9px;background:rgba(255,255,255,.04);color:#dfe5fa;text-decoration:none;font-size:12px;font-weight:750;cursor:pointer;transition:transform .16s,border-color .16s,background .16s}.btn:hover{transform:translateY(-1px);border-color:rgba(174,150,255,.42);background:rgba(255,255,255,.08);color:#fff}.btn-primary{border-color:transparent;background:linear-gradient(135deg,#8e6cff,#b59aff);color:#120d24;box-shadow:0 8px 24px rgba(131,91,246,.26)}.btn-primary:hover{background:linear-gradient(135deg,#a083ff,#c3aeff);color:#0f0b20}.btn:disabled{opacity:.5;cursor:not-allowed;transform:none}.hint{margin-top:10px;color:var(--mut);font-size:12px;line-height:1.65}.scan-panel{border-color:rgba(156,124,255,.25)}.counter{margin-left:auto;display:flex;align-items:baseline;gap:7px;padding:7px 11px;border:1px solid rgba(93,226,207,.2);border-radius:10px;background:rgba(93,226,207,.06)}.count{font-size:29px;font-weight:800;letter-spacing:-.06em;color:var(--accent-2);font-variant-numeric:tabular-nums}
+  .results-head{margin-bottom:13px}.section-title{margin:0;font-size:15px;letter-spacing:-.01em}.section-detail{color:var(--mut);font-size:12px}.table-wrap{overflow:auto;border:1px solid rgba(157,173,210,.11);border-radius:10px}table{width:100%;min-width:780px;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:11px 10px;border-bottom:1px solid rgba(157,173,210,.1)}tbody tr:last-child td{border-bottom:0}tbody tr{transition:background .15s}tbody tr:hover{background:rgba(156,124,255,.055)}th{background:rgba(8,11,21,.58);color:#99a6c7;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.12em}td.ip{font:12px ui-monospace,SFMono-Regular,Consolas,monospace}tr.self td{color:var(--mut)}.tag{display:inline-block;margin:2px 3px 2px 0;padding:3px 6px;border:1px solid var(--line);border-radius:5px;background:#1a2133;font:10px ui-monospace,SFMono-Regular,monospace}.tag.svc{border-color:rgba(156,124,255,.31);background:rgba(126,99,206,.12);color:#d4c6ff}.os{display:inline-block;padding:3px 7px;border:1px solid var(--line);border-radius:5px;font-size:10px;font-weight:750}.os.windows{border-color:#24557e;background:#0d2438;color:#91d0ff}.os.linux{border-color:#5f4b20;background:#2a2412;color:#ffda87}.os.macos,.os.apple-mobile{border-color:#4d3670;background:#251a38;color:#e6c5ff}.os.network-device{border-color:#245d36;background:#102e1a;color:#8cf0b3}.os.unknown{color:var(--mut)}.conf{margin-left:4px;color:var(--mut);font-size:10px}.badge-self{padding:2px 6px;border:1px solid rgba(156,124,255,.52);border-radius:10px;color:#c6b7ff;font-size:9px}.spinner{display:inline-block;width:15px;height:15px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;vertical-align:-3px;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}pre{margin:12px 0;border:1px solid var(--line);border-radius:10px;background:#090c16;padding:13px;overflow:auto;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;color:#cbd5ed;white-space:pre-wrap}.err{color:var(--hi)}.okmsg{color:var(--ok)}.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:16px}.scope-result{border-color:rgba(93,226,207,.24)}@media(max-width:720px){.topbar{padding:12px 16px}.brand p{display:none}.wrap{padding:20px 16px}.page-intro{display:block}.step{display:inline-block;margin-top:13px}.panel{padding:17px}.counter{margin-left:0}.table-wrap{margin:0 -2px}.nav a{padding:7px}}@media(max-width:400px){.nav a:first-child{display:none}}
 </style>
 </head>
 <body>
-<header>
-  <h1>NightTrace · Network Discovery</h1>
-  <span class="mut" id="sub">find the hosts on your WiFi, then build a scope</span>
-  <a class="back" href="/scope-editor">Edit full scope</a>
-  <a class="back" href="/">&larr; back to dashboard</a>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">N</span><div><h1>NightTrace</h1><p id="sub">Network discovery</p></div></div>
+  <div class="nav"><a href="/scope-editor">Edit scope</a><a href="/">Dashboard ↗</a></div>
 </header>
 
 <div class="wrap">
-  <div class="panel">
+  <div class="page-intro">
+    <div><div class="eyebrow">Intelligence gathering</div><h2>Find the systems that matter.</h2><p>Perform a non-destructive local sweep, select the hosts you are authorized to assess, and turn them directly into a precise scope.</p></div>
+    <span class="step">02 · discover hosts</span>
+  </div>
+  <div class="panel scan-panel">
     <div class="row">
       <div>
         <label for="cidr">Subnet (CIDR)</label><br>
@@ -74,7 +37,7 @@
       <div style="align-self:flex-end">
         <button class="btn btn-primary" id="scanBtn" onclick="scan()">Scan network</button>
       </div>
-      <div style="align-self:flex-end;margin-left:auto">
+      <div class="counter" style="align-self:flex-end">
         <span class="count" id="count">0</span> <span class="mut">live hosts</span>
       </div>
     </div>
@@ -86,20 +49,19 @@
   </div>
 
   <div class="panel" id="resultsPanel" style="display:none">
-    <div class="row" style="margin-bottom:10px">
-      <strong>Discovered hosts</strong>
-      <span class="mut">— tick the ones in your engagement</span>
+    <div class="row results-head">
+      <div><h3 class="section-title">Discovered hosts</h3><span class="section-detail">Select only the systems in your engagement.</span></div>
       <div style="margin-left:auto" class="row">
         <button class="btn" onclick="selectAll(true)">Select all</button>
         <button class="btn" onclick="selectAll(false)">Clear</button>
       </div>
     </div>
-    <table>
+    <div class="table-wrap"><table>
       <thead><tr>
         <th style="width:34px"></th><th>IP</th><th>Hostname</th><th>OS (guess)</th><th>MAC</th><th>Open ports / services</th>
       </tr></thead>
       <tbody id="rows"></tbody>
-    </table>
+    </table></div>
 
     <div class="bar">
       <div>
@@ -121,7 +83,7 @@
     </div>
   </div>
 
-  <div class="panel" id="scopePanel" style="display:none">
+  <div class="panel scope-result" id="scopePanel" style="display:none">
     <div class="row"><strong>Scope written</strong><span class="okmsg" id="scopePath"></span></div>
     <pre id="scopeYaml"></pre>
     <div class="hint">Now run the engagement against exactly these hosts:</div>

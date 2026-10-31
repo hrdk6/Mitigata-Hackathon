@@ -5,53 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NightTrace — scope</title>
 <style>
-  :root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--fg:#e6edf3;--mut:#8b949e;--accent:#7E56C2;
-        --ok:#3fb950;--med:#e3853d;--hi:#f85149}
-  *{box-sizing:border-box}
-  body{margin:0;font:15px/1.5 system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--fg)}
-  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-  header h1{margin:0;font-size:20px}
-  .mut{color:var(--mut)}
-  .nav{margin-left:auto;display:flex;gap:10px}
-  .nav a{color:var(--mut);text-decoration:none;font-size:13px}
-  .nav a:hover{color:var(--fg)}
-  .wrap{max-width:900px;margin:0 auto;padding:18px}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .full{grid-column:1/3}
-  label{display:block;font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
-  .sub{font-size:11px;text-transform:none;letter-spacing:0;color:var(--mut)}
-  input,select,textarea{width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);
-    border-radius:6px;padding:8px 10px;font:14px ui-monospace,Consolas,monospace}
-  textarea{min-height:92px;resize:vertical}
-  .btn{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border-radius:6px;border:1px solid var(--line);
-       background:var(--panel);color:var(--fg);text-decoration:none;font-size:14px;font-weight:600;cursor:pointer}
-  .btn:hover{background:#21262d;border-color:var(--accent);color:#fff}
-  .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
-  .btn-primary:hover{background:#6a42b0}
-  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  .hint{font-size:12.5px;color:var(--mut);margin-top:6px}
-  .msg{margin-top:10px;font-size:13px}
-  .err{color:var(--hi)} .okmsg{color:var(--ok)}
-  ul.errs{margin:6px 0 0;padding-left:18px;color:var(--hi);font-size:13px}
-  pre{background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;
-      font:13px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap}
-  .note{border-left:3px solid var(--accent);padding:6px 10px;background:#1a1430;border-radius:4px;font-size:12.5px;color:#cdb8ff}
-  @media(max-width:720px){.grid{grid-template-columns:1fr}.full{grid-column:auto}}
+  :root{--bg:#090b14;--panel:rgba(18,23,40,.82);--field:#090d19;--line:rgba(157,173,210,.16);--fg:#eef1ff;--mut:#9ca7c4;--accent:#9c7cff;--accent-2:#5de2cf;--ok:#65e3a1;--hi:#ff6d7a}
+  *{box-sizing:border-box}html{min-height:100%;background:#05060c}body{min-height:100vh;margin:0;font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--fg);background:radial-gradient(circle at 8% 0,rgba(116,80,217,.25),transparent 28rem),radial-gradient(circle at 92% 12%,rgba(41,190,174,.12),transparent 24rem),linear-gradient(135deg,#0b0e19,#080a13 60%,#05070e)}body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.18;background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);background-size:44px 44px;mask-image:linear-gradient(to bottom,black,transparent 74%)}
+  header,.wrap{position:relative;z-index:1}.topbar{min-height:74px;padding:12px clamp(18px,4vw,48px);display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line);background:rgba(7,9,17,.62);backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:11px}.brand-mark{display:grid;place-items:center;width:35px;height:35px;border:1px solid rgba(170,146,255,.55);border-radius:11px;background:linear-gradient(135deg,rgba(163,125,255,.25),rgba(93,226,207,.16));box-shadow:0 0 26px rgba(133,99,255,.22);color:#e6dcff;font-weight:900}.brand h1{margin:0;font-size:17px;letter-spacing:-.02em}.brand p{margin:1px 0 0;color:var(--mut);font-size:11px;letter-spacing:.07em;text-transform:uppercase}.mut{color:var(--mut)}.nav{margin-left:auto;display:flex;align-items:center;gap:7px}.nav a{padding:7px 10px;border:1px solid transparent;border-radius:8px;color:var(--mut);text-decoration:none;font-size:12px;font-weight:650;transition:.16s}.nav a:hover{border-color:var(--line);background:rgba(255,255,255,.045);color:#fff}
+  .wrap{max-width:1100px;margin:0 auto;padding:30px clamp(18px,4vw,48px) 44px}.page-intro{display:flex;align-items:end;justify-content:space-between;gap:20px;margin:0 0 18px}.eyebrow{display:flex;align-items:center;gap:7px;margin-bottom:6px;color:#bba9ff;font-size:10px;font-weight:800;letter-spacing:.13em;text-transform:uppercase}.eyebrow:before{content:"";width:20px;height:1px;background:currentColor}.page-intro h2{margin:0;font-size:clamp(25px,4vw,35px);letter-spacing:-.045em}.page-intro p{max-width:670px;margin:7px 0 0;color:#b4bfdb;font-size:13px}.step{padding:8px 11px;border:1px solid rgba(174,150,255,.28);border-radius:8px;background:rgba(133,99,255,.1);color:#d8cdfd;font:11px ui-monospace,SFMono-Regular,Consolas,monospace;white-space:nowrap}
+  .panel{border:1px solid var(--line);border-radius:15px;padding:22px;background:var(--panel);box-shadow:0 16px 42px rgba(0,0,0,.16);backdrop-filter:blur(14px);margin-bottom:16px}.panel-heading{display:flex;align-items:start;justify-content:space-between;gap:16px;margin-bottom:19px}.panel-heading h3{margin:0;font-size:15px;letter-spacing:-.01em}.panel-heading p{margin:3px 0 0;color:var(--mut);font-size:12px}.panel-tag{padding:4px 7px;border:1px solid rgba(93,226,207,.26);border-radius:5px;background:rgba(93,226,207,.08);color:var(--accent-2);font-size:9px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.full{grid-column:1/3}label{display:block;margin-bottom:6px;color:#b9c3df;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.11em}.sub{font-size:10px;font-weight:500;text-transform:none;letter-spacing:0;color:var(--mut)}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:9px;outline:0;background:var(--field);color:var(--fg);padding:10px 11px;font:13px ui-monospace,SFMono-Regular,Consolas,monospace;transition:border-color .16s,box-shadow .16s,background .16s}input:focus,select:focus,textarea:focus{border-color:rgba(174,150,255,.68);background:#0d1020;box-shadow:0 0 0 3px rgba(156,124,255,.12)}textarea{min-height:94px;resize:vertical}.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:8px 13px;border:1px solid var(--line);border-radius:9px;background:rgba(255,255,255,.04);color:#dfe5fa;text-decoration:none;font-size:12px;font-weight:750;cursor:pointer;transition:transform .16s,border-color .16s,background .16s}.btn:hover{transform:translateY(-1px);border-color:rgba(174,150,255,.42);background:rgba(255,255,255,.08);color:#fff}.btn-primary{border-color:transparent;background:linear-gradient(135deg,#8e6cff,#b59aff);color:#120d24;box-shadow:0 8px 24px rgba(131,91,246,.26)}.btn-primary:hover{background:linear-gradient(135deg,#a083ff,#c3aeff);color:#0f0b20}.btn:disabled{opacity:.5;cursor:not-allowed;transform:none}.hint{margin-top:6px;color:var(--mut);font-size:12px}.msg{margin-top:10px;font-size:12px}.err{color:var(--hi)}.okmsg{color:var(--ok)}ul.errs{margin:6px 0 0;padding-left:18px;color:var(--hi);font-size:12px}pre{margin:12px 0;border:1px solid var(--line);border-radius:10px;background:#090c16;padding:13px;overflow:auto;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;color:#cbd5ed;white-space:pre-wrap}.note{display:flex;gap:10px;border:1px solid rgba(156,124,255,.28);border-radius:10px;padding:11px 12px;background:linear-gradient(110deg,rgba(97,64,173,.17),rgba(21,37,57,.27));font-size:12px;color:#d5ccf8}.note:before{content:"✓";display:grid;place-items:center;flex:0 0 19px;height:19px;border-radius:50%;background:rgba(93,226,207,.15);color:var(--accent-2);font-size:11px;font-weight:900}.result-panel{border-color:rgba(93,226,207,.24)}@media(max-width:720px){.topbar{padding:12px 16px}.brand p{display:none}.nav{margin-left:auto}.nav a{padding:7px}.wrap{padding:20px 16px}.page-intro{display:block}.step{display:inline-block;margin-top:13px}.grid{grid-template-columns:1fr}.full{grid-column:auto}.panel{padding:17px}.panel-heading{display:block}.panel-tag{display:inline-block;margin-top:9px}}@media(max-width:400px){.nav a:first-child{display:none}}
 </style>
 </head>
 <body>
-<header>
-  <h1>NightTrace · Scope</h1>
-  <span class="mut" id="sub">calibrate what the agents may touch</span>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">N</span><div><h1>NightTrace</h1><p id="sub">Scope calibration</p></div></div>
   <div class="nav">
     <a href="/discover">Discover hosts</a>
-    <a href="/">Dashboard</a>
+    <a href="/">Dashboard ↗</a>
   </div>
 </header>
 
 <div class="wrap">
+  <div class="page-intro">
+    <div><div class="eyebrow">Pre-engagement</div><h2>Calibrate the assessment boundary.</h2><p>Set the exact networks, hosts, ports, and binaries NightTrace is allowed to examine. The Scope Guard enforces this configuration at runtime.</p></div>
+    <span class="step">01 · define scope</span>
+  </div>
   <div class="panel">
+    <div class="panel-heading"><div><h3>Assessment parameters</h3><p>Every field becomes part of the engagement’s explicit allow-list.</p></div><span class="panel-tag">default deny</span></div>
     <div class="grid">
       <div>
         <label for="engagement">Engagement name</label>
@@ -111,7 +88,7 @@
     </div>
   </div>
 
-  <div class="panel" id="outPanel" style="display:none">
+  <div class="panel result-panel" id="outPanel" style="display:none">
     <div class="bar"><strong>Written</strong><span class="okmsg" id="outPath"></span></div>
     <pre id="outYaml"></pre>
     <div class="bar" style="margin-top:4px">
@@ -145,7 +122,8 @@ async function load(){
     $('ports').value = (sc.ports || []).join(', ');
     if(lim.max_runtime_minutes!=null) $('mrt').value = lim.max_runtime_minutes;
     if(lim.rate_limit_pps!=null) $('rpp').value = lim.rate_limit_pps;
-    $('sub').textContent = d.exists ? `editing ${d.path}` : 'no scope.yaml yet — this will create it';
+    const scopeName = String(d.path || 'scope.yaml').split(/[\\/]/).pop();
+    $('sub').textContent = d.exists ? `editing ${scopeName}` : 'no scope.yaml yet — this will create it';
     msg(d.error ? ('current file error: '+esc(d.error)) : '', d.error?'err':'');
   }catch(e){ msg('could not load current scope: '+esc(e.message),'err'); }
 }
