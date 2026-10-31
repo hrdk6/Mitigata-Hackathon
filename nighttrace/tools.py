@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 import socket
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from urllib import error, request
 
 from nighttrace import osfp
@@ -41,20 +42,30 @@ _opener = request.build_opener(_NoRedirect)
 
 
 def tcp_scan(guard: ScopeGuard, host: str, ports: list[int] | None = None,
-             timeout: float = 0.5) -> list[dict]:
-    """Non-destructive TCP connect scan. Returns [{port, service, product, banner}, ...]."""
+             timeout: float = 1.5, workers: int = 32) -> list[dict]:
+    """Non-destructive TCP connect scan. Returns [{port, service, product, banner}, ...].
+
+    Ports are probed concurrently (the Scope Guard is thread-safe and still gates
+    and paces every connection), so a tolerant per-port timeout — needed so real
+    WiFi/LAN latency does not hide slow-to-answer open ports — stays fast.
+    """
     ports = ports or DEFAULT_PORTS
-    found: list[dict] = []
-    for port in ports:
+
+    def _probe(port: int) -> dict | None:
         if not guard.check_network(host, port).allowed:
-            continue
+            return None
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(timeout)
                 if s.connect_ex((host, port)) == 0:
-                    found.append({"port": port, "service": None, "product": None, "banner": _banner(s)})
+                    return {"port": port, "service": None, "product": None, "banner": _banner(s)}
         except OSError:
-            pass
+            return None
+        return None
+
+    with ThreadPoolExecutor(max_workers=min(workers, len(ports) or 1)) as ex:
+        found = [r for r in ex.map(_probe, ports) if r]
+    found.sort(key=lambda d: d["port"])
     return found
 
 
@@ -103,13 +114,14 @@ def nmap_scan(guard: ScopeGuard, host: str, ports: list[int] | None = None) -> l
     return out
 
 
-def discover(guard: ScopeGuard, host: str, ports: list[int] | None = None) -> list[dict]:
+def discover(guard: ScopeGuard, host: str, ports: list[int] | None = None,
+             timeout: float = 1.5) -> list[dict]:
     """Pick the best available discovery method: nmap if present, else connect scan."""
     if has_nmap():
         res = nmap_scan(guard, host, ports)
         if res:
             return res
-    return tcp_scan(guard, host, ports)
+    return tcp_scan(guard, host, ports, timeout=timeout)
 
 
 def _banner(s: socket.socket) -> str:

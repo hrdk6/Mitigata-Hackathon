@@ -4,6 +4,11 @@ services:
     container_name: nighttrace
     ports:
       - "8000:8000"
-    # The default command runs the self-contained demo and serves the dashboard
-    # at http://localhost:8000/ . Everything stays inside the container.
-    command: python run_demo.py --serve --api-port 8000 --api-host 0.0.0.0
+    # Persist the calibrated scope and the written reports on the host, so what
+    # you set in the UI survives container restarts.
+    volumes:
+      - ./config:/app/config
+      - ./reports:/app/reports
+    # Serve the live dashboard around the calibrated scope (config/scope.yaml).
+    # Calibrate it in the UI and press Run — no demo, runs whatever you give it.
+    command: nighttrace serve --scope config/scope.yaml --host 0.0.0.0 --port 8000

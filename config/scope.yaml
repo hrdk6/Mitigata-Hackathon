@@ -1,0 +1,15 @@
+engagement: scope-change-verify
+tier: breach
+scope:
+  networks: []
+  hosts:
+  - 192.168.60.139
+  binaries: []
+  exclude: []
+  ports: []
+limits:
+  max_runtime_minutes: 20.0
+  rate_limit_pps: 50
+  destructive: false
+flags:
+  pattern: FLAG\{.*?\}

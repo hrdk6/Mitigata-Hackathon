@@ -11,12 +11,11 @@ from __future__ import annotations
 
 import argparse
 import sys
-import threading
 from pathlib import Path
 
 from nighttrace import reporter, scoring
 from nighttrace.blackboard import Blackboard
-from nighttrace.config import load_checks, load_scope
+from nighttrace.config import Config, load_checks, load_scope
 from nighttrace.orchestrator import Orchestrator
 
 
@@ -79,13 +78,22 @@ def cmd_serve(args) -> int:
     import uvicorn
 
     from nighttrace.api import create_app
-    config, checks = _load(args)
     bb = Blackboard()
-    orch = Orchestrator(config, checks, blackboard=bb)
+    # Bring the dashboard up around the calibrated scope. If a runnable scope
+    # already exists, auto-start the engagement; otherwise come up idle so the
+    # scope can be calibrated from the UI and started with the Run button.
+    try:
+        config = load_scope(args.scope)
+        autostart = True
+        print(f"\n  scope loaded from {args.scope} — starting engagement '{config.engagement}' (tier {config.tier})")
+    except (ValueError, FileNotFoundError) as exc:
+        config = Config()
+        autostart = False
+        print(f"\n  no runnable scope at {args.scope} yet ({exc})")
+        print(f"  calibrate it at http://{args.host}:{args.port}/scope-editor, then press Run")
 
-    threading.Thread(target=orch.run, daemon=True).start()
-    app = create_app(bb, config)
-    print(f"\n  NightTrace live at http://{args.host}:{args.port}  (dashboard at /)")
+    app = create_app(bb, config, autostart=autostart)
+    print(f"  NightTrace live at http://{args.host}:{args.port}  (dashboard at /)")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
 

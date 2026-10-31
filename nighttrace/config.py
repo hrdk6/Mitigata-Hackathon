@@ -42,6 +42,9 @@ class Limits:
     rate_limit_pps: int = 50
     destructive: bool = False
     max_crawl_pages: int = 50
+    # TCP connect-scan timeout per port. 1.5s tolerates real WiFi/LAN latency;
+    # a too-small value silently misses slow-to-answer open ports.
+    connect_timeout: float = 1.5
 
 
 @dataclass
@@ -96,6 +99,7 @@ def load_scope(path: str | Path) -> Config:
             rate_limit_pps=int(limits_d.get("rate_limit_pps", 50)),
             destructive=bool(limits_d.get("destructive", False)),
             max_crawl_pages=int(limits_d.get("max_crawl_pages", 50)),
+            connect_timeout=float(limits_d.get("connect_timeout", 1.5)),
         ),
         flag_pattern=str(flags_d.get("pattern", r"FLAG\{.*?\}")),
         raw=data,

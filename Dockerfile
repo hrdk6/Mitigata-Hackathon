@@ -8,7 +8,7 @@ COPY . .
 RUN pip install --no-cache-dir -e .
 
 EXPOSE 8000
-# Self-contained demo: starts the localhost lab, runs the engine, serves the
-# live dashboard. For a real engagement, mount a scope file and run:
-#   docker compose run --rm nighttrace nighttrace run --scope /app/config/scope.yaml
-CMD ["python", "run_demo.py", "--serve", "--api-port", "8000", "--api-host", "0.0.0.0"]
+# Bring up the live dashboard around the calibrated scope (config/scope.yaml).
+# No demo, no hardcoded targets: calibrate the scope in the UI (/scope-editor or
+# /discover) and press Run, or drop in a scope.yaml and it auto-starts on boot.
+CMD ["nighttrace", "serve", "--scope", "config/scope.yaml", "--host", "0.0.0.0", "--port", "8000"]

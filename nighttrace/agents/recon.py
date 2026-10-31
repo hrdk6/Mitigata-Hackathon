@@ -51,7 +51,8 @@ class ReconAgent(Agent):
         via = "nmap" if tools.has_nmap() else "connect-scan"
         arp = netdiscover.arp_table()  # best-effort MAC map for OS fingerprinting
         for host in hosts:
-            open_ports = tools.discover(self.guard, host, ports)
+            open_ports = tools.discover(self.guard, host, ports,
+                                        timeout=self.config.limits.connect_timeout)
             if open_ports:
                 listing = ", ".join(str(d["port"]) for d in open_ports)
                 self.emit("port_scan", Ptes.INTEL_GATHERING.value,

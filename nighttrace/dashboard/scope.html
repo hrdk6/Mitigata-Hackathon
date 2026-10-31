@@ -114,7 +114,12 @@
   <div class="panel" id="outPanel" style="display:none">
     <div class="bar"><strong>Written</strong><span class="okmsg" id="outPath"></span></div>
     <pre id="outYaml"></pre>
-    <div class="hint">Run the engagement against exactly this scope:</div>
+    <div class="bar" style="margin-top:4px">
+      <button class="btn btn-primary" id="runNowBtn" onclick="runNow()">Run now &rarr;</button>
+      <a class="btn" href="/">Open dashboard</a>
+      <span class="msg" id="runMsg"></span>
+    </div>
+    <div class="hint" style="margin-top:10px">Or from a terminal:</div>
     <pre id="runCmd"></pre>
   </div>
 </div>
@@ -176,6 +181,19 @@ async function save(){
     $('outPanel').scrollIntoView({behavior:'smooth'});
   }catch(e){ msg('save error: '+esc(e.message),'err'); }
   finally{ $('saveBtn').disabled = false; }
+}
+
+// Scan the scope we just saved and jump to the live dashboard.
+async function runNow(){
+  const b = $('runNowBtn'); b.disabled = true;
+  $('runMsg').innerHTML = '<span>starting…</span>';
+  try{
+    const r = await fetch('/run',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const d = await r.json();
+    if(!r.ok){ $('runMsg').innerHTML = `<span class="err">${esc(d.error||'could not start run')}</span>`; b.disabled=false; return; }
+    $('runMsg').innerHTML = '<span class="okmsg">running — opening dashboard…</span>';
+    setTimeout(()=>{ location.href = '/'; }, 700);
+  }catch(e){ $('runMsg').innerHTML = `<span class="err">run error: ${esc(e.message)}</span>`; b.disabled=false; }
 }
 
 load();

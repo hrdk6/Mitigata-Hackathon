@@ -798,7 +798,10 @@ python run_demo.py --serve      # or: live dashboard at http://127.0.0.1:8000/
 
 A verified run against the bundled lab confirms **14 findings with zero false alarms and zero
 out-of-scope probes**, captures the planted flag, and chains `external → admin → flag` — scoring
-"Great" on every rubric metric in under two seconds. (`docker compose up` does the same in a container.)
+"Great" on every rubric metric in under two seconds.
+
+> The demo lab is reached only via `run_demo.py`. `docker compose up` and `nighttrace serve` run the
+> engine against **whatever scope you calibrate** (`config/scope.yaml`) — never the demo.
 
 ### Run against your own (authorized) scope
 
@@ -807,6 +810,10 @@ out-of-scope probes**, captures the planted flag, and chains `external → admin
 ```bash
 cp config/scope.example.yaml config/scope.yaml
 ```
+
+Or calibrate it entirely in the UI: open the dashboard and use **Discover hosts** (`/discover`) to
+sweep your LAN, or **Edit scope** (`/scope-editor`) to write `config/scope.yaml` directly — then press
+**Run**. No file editing and no restart required.
 
 **2. (Optional) Enable the LLM narrative:**
 
@@ -820,9 +827,12 @@ export ANTHROPIC_API_KEY=sk-...   # optional — omit to run fully offline
 docker compose up --build
 ```
 
-That single command is the entire engagement (FR-7 + Autonomy). It starts the engine, API, database,
-and dashboard; the Orchestrator runs the full PTES loop against the in-scope targets and writes the
-report — **no human input during the run**.
+That single command brings up the engine, API, and live dashboard around `config/scope.yaml` (mounted
+from the host, so your calibration and reports persist). If a runnable scope is already present it
+**auto-starts** on boot; otherwise the dashboard comes up idle — calibrate the scope in the UI and
+press **Run**. Either way the Orchestrator runs the full PTES loop against the in-scope targets with
+**no human input during the run**, and you can re-point it at a new scope and press Run again without a
+restart.
 
 **Prefer the CLI?**
 
