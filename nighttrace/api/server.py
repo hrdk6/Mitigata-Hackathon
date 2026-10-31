@@ -37,7 +37,12 @@ _CHECKS_FILE = _CONFIG / "checks.yaml"
 def create_app(bb: Blackboard, config: Config, checks: list[dict] | None = None, *, autostart: bool = False) -> FastAPI:
     app = FastAPI(title="NightTrace", version="0.1.0",
                   description="Autonomous multi-agent penetration-testing engine (authorized, in-scope only).")
-    target_scans = TargetScanManager(bb, config, checks or [])
+
+    def _load_checks() -> list[dict]:
+        return load_checks(_CHECKS_FILE) if _CHECKS_FILE.is_file() else []
+
+    loaded_checks = checks or _load_checks()
+    target_scans = TargetScanManager(bb, config, loaded_checks)
 
     # The engine's live state. The blackboard and config are swapped on each new
     # run, and every read endpoint goes through here so it always reflects the
@@ -232,7 +237,7 @@ def create_app(bb: Blackboard, config: Config, checks: list[dict] | None = None,
                 {"error": "Confirm that you are authorised to assess this website before starting a scan."},
                 status_code=400,
             )
-        if not checks:
+        if not loaded_checks:
             return JSONResponse(
                 {"error": "No checks are loaded; start NightTrace with --checks config/checks.yaml."},
                 status_code=503,

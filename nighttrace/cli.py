@@ -92,7 +92,8 @@ def cmd_serve(args) -> int:
         print(f"\n  no runnable scope at {args.scope} yet ({exc})")
         print(f"  calibrate it at http://{args.host}:{args.port}/scope-editor, then press Run")
 
-    app = create_app(bb, config, autostart=autostart)
+    checks = load_checks(args.checks) if Path(args.checks).is_file() else []
+    app = create_app(bb, config, checks=checks, autostart=autostart)
     print(f"  NightTrace live at http://{args.host}:{args.port}  (dashboard at /)")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0

@@ -278,7 +278,7 @@ async function startTargetScan(){
       body:JSON.stringify({target, authorized})
     });
     const data = await response.json();
-    if(!response.ok){ showTargetStatus(data.error || 'The scan could not be started.', 'err'); return; }
+    if(!response.ok){ showTargetStatus(data.error || data.detail || 'The scan could not be started.', 'err'); return; }
     const t = data.scan && data.scan.target;
     showTargetStatus(`Scanning ${t ? t.url : target} with the supported non-destructive checks…`, 'ok');
   }catch(e){
