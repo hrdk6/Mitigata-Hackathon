@@ -19,7 +19,6 @@ from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from nighttrace import attack_graph, netdiscover, reporter, scoring
-from nighttrace.api.target_scan import TargetScanManager, TargetValidationError, parse_web_target
 from nighttrace.blackboard import Blackboard
 from nighttrace.config import TIERS, Config, load_checks, load_scope
 from nighttrace.models import now_iso
@@ -38,11 +37,6 @@ def create_app(bb: Blackboard, config: Config, checks: list[dict] | None = None,
     app = FastAPI(title="NightTrace", version="0.1.0",
                   description="Autonomous multi-agent penetration-testing engine (authorized, in-scope only).")
 
-    def _load_checks() -> list[dict]:
-        return load_checks(_CHECKS_FILE) if _CHECKS_FILE.is_file() else []
-
-    loaded_checks = checks or _load_checks()
-    target_scans = TargetScanManager(bb, config, loaded_checks)
 
     # The engine's live state. The blackboard and config are swapped on each new
     # run, and every read endpoint goes through here so it always reflects the
@@ -110,20 +104,8 @@ def create_app(bb: Blackboard, config: Config, checks: list[dict] | None = None,
     def healthz() -> dict:
         cfg = state["config"]
         return {"ok": True, "engagement": cfg.engagement, "tier": cfg.tier,
-                "run_status": state["status"], "running": _running(),
-                "ml_prioritizer": "NaiveBayes", "recall_score": 0.858}
+                "run_status": state["status"], "running": _running()}
 
-    @app.get("/ml/metrics")
-    def ml_metrics() -> dict:
-        from nighttrace.reasoning.classifier import default_classifier
-        return {
-            "model": "NaiveBayesVulnClassifier",
-            "samples": default_classifier.total_samples,
-            "vocabulary_size": len(default_classifier.vocabulary),
-            "macro_recall": default_classifier.recall_score,
-            "macro_precision": default_classifier.precision_score,
-            "metrics": default_classifier.evaluation_metrics,
-        }
 
     @app.get("/targets")
     def targets() -> dict:
@@ -140,8 +122,8 @@ def create_app(bb: Blackboard, config: Config, checks: list[dict] | None = None,
                 "findings": bb.list_findings(asset_host=asset["host"])}
 
     @app.get("/findings")
-    def findings(status: str | None = None, host: str | None = None):
-        return {"findings": state["bb"].list_findings(status=status, asset_host=host)}
+    def findings(status: str | None = None):
+        return {"findings": state["bb"].list_findings(status=status)}
 
     @app.get("/findings/{fid}")
     def finding(fid: int):
@@ -223,39 +205,6 @@ def create_app(bb: Blackboard, config: Config, checks: list[dict] | None = None,
                 "error": state["error"], "scope_path": state["scope_path"],
                 "engagement": cfg.engagement, "tier": cfg.tier,
                 "stats": state["bb"].stats()}
-
-    # -- one exact, operator-authorised web target from the dashboard -------
-    @app.get("/web/scan/status")
-    def web_scan_status() -> dict:
-        return target_scans.status()
-
-    @app.post("/web/scan")
-    def web_scan(payload: dict = Body(default={})):
-        payload = payload or {}
-        if payload.get("authorized") is not True:
-            return JSONResponse(
-                {"error": "Confirm that you are authorised to assess this website before starting a scan."},
-                status_code=400,
-            )
-        if not loaded_checks:
-            return JSONResponse(
-                {"error": "No checks are loaded; start NightTrace with --checks config/checks.yaml."},
-                status_code=503,
-            )
-        try:
-            target = parse_web_target(payload.get("target"))
-        except TargetValidationError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        started, state = target_scans.start(target)
-        if not started:
-            return JSONResponse(
-                {"error": "A target scan is already running.", "scan": state}, status_code=409
-            )
-        return {
-            "accepted": True,
-            "scan": state,
-            "message": "Scan started with an exact-host, exact-port scope. Results will appear below.",
-        }
 
     # -- network discovery (pre-engagement): find hosts on the local WiFi/LAN --
     @app.get("/discover", response_class=HTMLResponse)

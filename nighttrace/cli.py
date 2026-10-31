@@ -99,21 +99,6 @@ def cmd_serve(args) -> int:
     return 0
 
 
-def cmd_train(args) -> int:
-    from nighttrace.reasoning.classifier import NaiveBayesVulnClassifier, DEFAULT_TRAINING_DATA
-    clf = NaiveBayesVulnClassifier()
-    if args.dataset:
-        print(f"Loading and training on external dataset: {args.dataset}")
-        metrics = clf.train_from_file(args.dataset)
-    else:
-        print("Training Naive Bayes classifier on technology-agnostic corpus (Python, Node, Java, Go, PHP, etc.)...")
-        metrics = clf.train(DEFAULT_TRAINING_DATA, run_evaluation=True)
-
-    print("\n" + clf.format_evaluation_report(metrics))
-    if args.export:
-        clf.export_dataset(args.export)
-        print(f"[+] Exported dataset to {args.export}")
-    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -137,11 +122,6 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--host", default="127.0.0.1"); sv.add_argument("--port", type=int, default=8000)
     sv.set_defaults(func=cmd_serve)
 
-    tr = sub.add_parser("train", help="train and evaluate the technology-agnostic Naive Bayes vulnerability model")
-    tr.add_argument("--dataset", default=None, help="path to custom dataset (JSON or YAML)")
-    tr.add_argument("--folds", type=int, default=5, help="number of cross-validation folds")
-    tr.add_argument("--export", default=None, help="export training dataset to JSON file")
-    tr.set_defaults(func=cmd_train)
     return p
 
 
