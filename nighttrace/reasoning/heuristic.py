@@ -11,8 +11,20 @@ from nighttrace.models import SEVERITY_ORDER
 TASK_PRIORITY = {"recon": 0, "binary": 1, "web": 1, "verify": 2}
 
 
+def _priority_boost(task: dict) -> int:
+    """How much an active threat-modeling hypothesis wants this task moved up."""
+    try:
+        return int((task.get("data") or {}).get("priority_boost") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def prioritize(tasks: list[dict]) -> list[dict]:
-    return sorted(tasks, key=lambda t: (TASK_PRIORITY.get(t["type"], 9), t["id"]))
+    """Order the ready queue: phase first, then — within a phase — tasks a
+    hypothesis has boosted (frequently-appearing weaknesses) go first, then id
+    for a stable, reproducible tie-break."""
+    return sorted(tasks, key=lambda t: (TASK_PRIORITY.get(t["type"], 9),
+                                        -_priority_boost(t), t["id"]))
 
 
 def score_finding(severity: str, *, confirmed: bool = False, on_attack_path: bool = False) -> float:

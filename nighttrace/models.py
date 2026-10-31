@@ -120,3 +120,7 @@ class AgentResult:
     findings: list[FindingRec] = field(default_factory=list)
     followups: list[TaskSpec] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
+    # Threat-modeling hypotheses raised from the signals this agent saw. Each is
+    # a plain dict (Hypothesis.as_dict()); the orchestrator records them and
+    # feeds their priority_boost into the follow-up queue.
+    hypotheses: list[dict] = field(default_factory=list)

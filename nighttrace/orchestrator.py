@@ -37,6 +37,10 @@ class Orchestrator:
         }
         budget_min = config.limits.max_runtime_minutes * config.tier_settings["budget_mult"]
         self._budget_seconds = budget_min * 60.0
+        # Threat-modeling priority boosts accumulated from active hypotheses:
+        # by the check they suggest, and by the target they concern.
+        self._boost_by_check: dict[str, int] = {}
+        self._boost_by_target: dict[str, int] = {}
 
     # -- public --------------------------------------------------------------
     def run(self) -> dict:
@@ -114,6 +118,10 @@ class Orchestrator:
         for a in result.assets:
             self.bb.upsert_asset(a.host, a.port, a.service, a.product, a.surface, a.data)
 
+        # Threat modeling (PTES phase 3): record hypotheses first so the boosts
+        # they carry are available to the verify/follow-up tasks created below.
+        self._absorb_hypotheses(result.hypotheses)
+
         for f in result.findings:
             fid, is_new = self.bb.add_finding(
                 title=f.title, type=f.type, surface=f.surface, ptes=f.ptes,
@@ -131,14 +139,50 @@ class Orchestrator:
                 else:
                     target = {"host": f.asset_host, "port": f.asset_port,
                               "base_url": (f.data or {}).get("base_url")}
+                vdata = {"finding_id": fid, "check_id": f.check_id}
+                boost = self._boost_for(check_id=f.check_id, host=f.asset_host, port=f.asset_port)
+                if boost:
+                    vdata["priority_boost"] = boost
                 self.bb.enqueue_task(type="verify", ptes=Ptes.EXPLOITATION.value,
                                      target=target, check_id=f.check_id,
-                                     dedupe_key=f"verify:{fid}",
-                                     data={"finding_id": fid, "check_id": f.check_id})
+                                     dedupe_key=f"verify:{fid}", data=vdata)
 
         for fu in result.followups:
+            fdata = dict(fu.data or {})
+            boost = self._boost_for(check_id=fu.check_id, host=fu.target.get("host"),
+                                    port=fu.target.get("port"), base_url=fu.target.get("base_url"),
+                                    path=fu.target.get("path"))
+            if boost:
+                fdata["priority_boost"] = max(boost, int(fdata.get("priority_boost") or 0))
             self.bb.enqueue_task(type=fu.type, ptes=fu.ptes, target=fu.target,
-                                 check_id=fu.check_id, dedupe_key=fu.dedupe_key, data=fu.data)
+                                 check_id=fu.check_id, dedupe_key=fu.dedupe_key, data=fdata)
+
+    def _absorb_hypotheses(self, hyps: list[dict]) -> None:
+        """Record each formulated hypothesis as a threat-modeling event and fold
+        its priority_boost into the per-check and per-target boost maps."""
+        for h in hyps or []:
+            self.bb.add_event(
+                "orchestrator", "hypothesis_formulated", Ptes.THREAT_MODELING.value,
+                f"Formulated hypothesis: {h['title']} for {h['target']} "
+                f"(Confidence: {int(h.get('confidence', 0) * 100)}%) — {h['rationale']}",
+                data=h)
+            boost = int(h.get("priority_boost") or 0)
+            for cid in h.get("suggested_checks") or []:
+                self._boost_by_check[cid] = max(self._boost_by_check.get(cid, 0), boost)
+            tgt = h.get("target")
+            if tgt:
+                self._boost_by_target[tgt] = max(self._boost_by_target.get(tgt, 0), boost)
+
+    def _boost_for(self, *, check_id: str | None = None, host: str | None = None,
+                   port: int | None = None, base_url: str | None = None,
+                   path: str | None = None) -> int:
+        """Highest boost any active hypothesis gives this work, matched by the
+        check it would run or the target it concerns."""
+        keys = [base_url, f"{host}:{port}" if host and port else None, host, path]
+        candidates = [self._boost_by_target.get(k, 0) for k in keys if k]
+        if check_id:
+            candidates.append(self._boost_by_check.get(check_id, 0))
+        return max(candidates, default=0)
 
     def _score_findings(self, attack: dict) -> None:
         on_path: set[int] = set()

@@ -12,8 +12,10 @@ from urllib.parse import parse_qs, urljoin, urlparse
 from nighttrace import tools
 from nighttrace.agents.base import Agent
 from nighttrace.models import AgentResult, AssetRec, FindingRec, Ptes, Surface
+from nighttrace.reasoning import hypothesis
 
 _LINK_RE = re.compile(r'(?:href|src|action)=["\']([^"\'#]+)', re.I)
+_LOGIN_RE = re.compile(r'/(login|admin|signin|sign-in|wp-admin|portal|dashboard)\b', re.I)
 
 
 class WebAgent(Agent):
@@ -38,6 +40,14 @@ class WebAgent(Agent):
         res.assets.append(AssetRec(host=host, port=port, service="http",
                                    surface=Surface.WEB.value,
                                    data={"base_url": base, "endpoints": pages, "params": params}))
+
+        # Threat modeling: turn what the crawl saw into prioritised hypotheses.
+        if any(_LOGIN_RE.search(p) for p in pages):
+            res.hypotheses.extend(h.as_dict() for h in
+                                  hypothesis.generate_hypotheses("http_login", base))
+        if params:
+            res.hypotheses.extend(h.as_dict() for h in
+                                  hypothesis.generate_hypotheses("params_found", base))
 
         target = {"host": host, "port": port, "base_url": base, "params": params}
         for check in self.engine.applicable("web", {"service": "http"}):

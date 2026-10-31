@@ -23,6 +23,8 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from nighttrace import osfp
+
 # A small TCP port list used only to decide "is this host up?" and to hint at
 # what it is. A connect() that succeeds (open) or is actively refused (RST) both
 # prove the host is alive; a timeout proves nothing.
@@ -179,6 +181,14 @@ def scan_network(cidr: str, ports: list[int] | None = None, timeout: float = 0.3
         r["services"] = [{"port": p, "service": SERVICE_NAMES.get(p)}
                          for p in sorted(r["open_ports"])]
         r["is_self"] = ip in local
+        # OS fingerprint from TTL + open ports + MAC (non-destructive, no admin).
+        ttl = osfp.ttl_ping(ip)
+        guess = osfp.fingerprint(ttl=ttl, open_ports=r["open_ports"], mac=r["mac"])
+        r["os"] = guess["os"]
+        r["os_family"] = guess["family"]
+        r["os_confidence"] = guess["confidence"]
+        r["os_reasons"] = guess["reasons"]
+        r["ttl"] = ttl
         return r
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -223,6 +233,7 @@ if __name__ == "__main__":  # quick manual check: python -m nighttrace.netdiscov
         print(f"\n{res['count']} live host(s) on {res['cidr']}:")
         for h in res["hosts"]:
             svc = ",".join(str(s["port"]) for s in h["services"]) or "-"
+            os_s = f"{h['os']} ({int(h['os_confidence'] * 100)}%)" if h.get("os_family") != "unknown" else "?"
             print(f"  {h['ip']:<16} {h.get('mac') or '':<18} "
-                  f"{h.get('hostname') or '':<28} ports:{svc}"
+                  f"{h.get('hostname') or '':<24} {os_s:<28} ports:{svc}"
                   f"{'  (this machine)' if h['is_self'] else ''}")

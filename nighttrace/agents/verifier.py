@@ -9,6 +9,12 @@ from __future__ import annotations
 
 from nighttrace.agents.base import Agent
 from nighttrace.models import AgentResult, FindingRec, Ptes, Status, Surface
+from nighttrace.reasoning import hypothesis
+
+# Confirmed findings of these kinds mean a secret/credential is now in hand,
+# which raises the cross-surface credential-reuse hypothesis.
+_SECRET_CHECKS = {"web-default-credentials", "bin-weak-strings",
+                  "web-git-exposure", "web-sensitive-paths"}
 
 
 class VerifierAgent(Agent):
@@ -46,6 +52,20 @@ class VerifierAgent(Agent):
         self.bb.update_finding(fid, status=Status.CONFIRMED.value, data=merged)
         self.emit("verify", Ptes.EXPLOITATION.value,
                   f"#{fid} CONFIRMED: {finding['title']}", data={"finding_id": fid})
+
+        # A confirmed finding validates the hypothesis that predicted it.
+        tmpl = hypothesis.template_for_check(cid)
+        if tmpl:
+            self.emit("hypothesis_validated", Ptes.EXPLOITATION.value,
+                      f"Validated hypothesis for #{fid}: {tmpl['title']} "
+                      f"confirmed with captured evidence!",
+                      data={"finding_id": fid, "hypothesis_id": tmpl["tid"],
+                            "title": tmpl["title"], "category": tmpl["category"]})
+        # Holding a real secret/credential now raises cross-surface reuse as a
+        # fresh, high-priority hypothesis for the orchestrator to chase.
+        if cid in _SECRET_CHECKS and finding.get("asset_host"):
+            res.hypotheses.extend(h.as_dict() for h in
+                                  hypothesis.generate_hypotheses("creds_leaked", finding["asset_host"]))
 
         flag = (outcome.data or {}).get("flag")
         if flag:

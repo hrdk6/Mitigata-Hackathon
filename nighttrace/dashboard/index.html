@@ -32,6 +32,12 @@
   .chain{font:13px/1.8 ui-monospace,monospace}
   .chain .node{background:#21262d;border:1px solid var(--line);border-radius:5px;padding:2px 7px}
   .chain .flag{background:var(--accent);color:#fff}
+  .hyp{padding:8px 10px;margin:6px 0;border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:6px}
+  .hyp.val{border-left-color:var(--ok)}
+  .hyp .t{font-weight:600}
+  .hyp .m{font-size:12px;color:var(--mut);margin-top:2px}
+  .hyp .st{font-size:10.5px;padding:1px 6px;border-radius:4px;background:#21262d;color:var(--mut);float:right}
+  .hyp.val .st{background:var(--ok);color:#06240f;font-weight:700}
   .phases{display:flex;flex-wrap:wrap;gap:6px}
   .ph{font-size:12px;padding:3px 9px;border-radius:14px;border:1px solid var(--line);color:var(--mut)}
   .ph.active{background:var(--accent);color:#fff;border-color:var(--accent)}
@@ -66,6 +72,11 @@
   <div class="panel" style="grid-column:1/3">
     <h2>PTES phase progress</h2>
     <div class="phases" id="phases"></div>
+  </div>
+
+  <div class="panel" style="grid-column:1/3">
+    <h2>Threat-model hypotheses <span id="hyp-count" class="mut" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
+    <div id="hyps"><span class="mut">none yet — formulated as signals appear</span></div>
   </div>
 
   <div class="panel">
@@ -129,6 +140,18 @@ async function pollState(){
        <span class="badge">${x.severity.toUpperCase()}</span>
        <div class="m">${x.surface} · ${x.asset_host||''}${x.asset_port?(':'+x.asset_port):''}</div></div>`).join('')
       : '<span class="mut">none yet</span>';
+  }
+  const hy = await j('/hypotheses');
+  if(hy && hy.formulated){
+    document.getElementById('hyp-count').textContent =
+      hy.formulated.length ? `— ${hy.formulated.filter(h=>h.validated).length}/${hy.formulated.length} validated` : '';
+    document.getElementById('hyps').innerHTML = hy.formulated.length ? hy.formulated.map(h=>
+      `<div class="hyp ${h.validated?'val':''}">
+         <span class="st">${h.validated?'VALIDATED':'formulated'}</span>
+         <span class="t">${escapeHtml(h.title)}</span>
+         <div class="m">${escapeHtml(h.target||'')} · confidence ${Math.round((h.confidence||0)*100)}% · priority +${h.priority_boost||0}</div>
+         <div class="m">${escapeHtml(h.rationale||'')}</div>
+       </div>`).join('') : '<span class="mut">none yet — formulated as signals appear</span>';
   }
   const ap = await j('/attack-path');
   if(ap && ap.paths && ap.paths.length){

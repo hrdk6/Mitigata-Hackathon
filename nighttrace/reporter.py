@@ -52,11 +52,35 @@ def build(bb: Blackboard, config: Config, attack: dict) -> dict:
         "confirmed_findings": confirmed,
         "attack_paths": attack.get("paths", []),
         "attack_edges": attack.get("edges", []),
+        "hypotheses": collect_hypotheses(events),
         "phases": [{"phase": p, "label": lbl, "activity": act, "events": phase_counts.get(p, 0)}
                    for p, lbl, act in _PHASES],
     }
     report["narrative"] = _narrative(report)
     return report
+
+
+def collect_hypotheses(events: list[dict]) -> dict:
+    """Reconstruct the threat-modeling hypotheses from the event trail: the
+    formulated set (deduped by id) and which of them were later validated."""
+    formulated: dict[str, dict] = {}
+    validated_titles: set[str] = set()
+    validated: list[dict] = []
+    for e in events:
+        action = e.get("action")
+        d = e.get("data") or {}
+        if action == "hypothesis_formulated":
+            formulated.setdefault(d.get("id") or e.get("message", ""), d)
+        elif action == "hypothesis_validated":
+            validated.append(d)
+            if d.get("title"):
+                validated_titles.add(d["title"])
+    rows = []
+    for h in formulated.values():
+        rows.append({**h, "validated": h.get("title") in validated_titles})
+    rows.sort(key=lambda h: (not h["validated"], -(h.get("priority_boost") or 0)))
+    return {"formulated": rows, "validated": validated,
+            "validated_titles": sorted(validated_titles)}
 
 
 def _narrative(report: dict) -> str | None:
@@ -166,6 +190,25 @@ def render_markdown(report: dict) -> str:
         out.append(mer)
         out.append("")
 
+    hyp = report.get("hypotheses") or {"formulated": [], "validated": []}
+    out.append("## Threat modeling — hypotheses")
+    out.append("")
+    if not hyp["formulated"]:
+        out.append("_No hypotheses were formulated._")
+    else:
+        n_val = sum(1 for h in hyp["formulated"] if h.get("validated"))
+        out.append("Hypothesis-driven: the engine predicts the most frequently-appearing "
+                   "weaknesses the moment a signal appears and concentrates on them first. "
+                   f"**{n_val} of {len(hyp['formulated'])}** were validated with captured evidence.")
+        out.append("")
+        out.append("| Hypothesis | Target | Confidence | Priority | Status |")
+        out.append("|---|---|---|---|---|")
+        for h in hyp["formulated"]:
+            status = "**VALIDATED**" if h.get("validated") else "formulated"
+            out.append(f"| {h.get('title')} | `{h.get('target')}` | "
+                       f"{int((h.get('confidence') or 0) * 100)}% | +{h.get('priority_boost', 0)} | {status} |")
+    out.append("")
+
     out.append("## PTES phase walkthrough")
     out.append("")
     out.append("| Phase | Activity | Events |")
@@ -177,8 +220,12 @@ def render_markdown(report: dict) -> str:
     out.append("## Discovered assets")
     out.append("")
     for a in report["assets"]["network"]:
+        d = a.get("data") or {}
+        os_note = ""
+        if d.get("os_family") and d["os_family"] != "unknown":
+            os_note = f"  ·  OS: {d['os']} ({int((d.get('os_confidence') or 0) * 100)}%)"
         out.append(f"- `{a['host']}:{a.get('port')}` — {a.get('service')} "
-                   f"{('(' + a['product'] + ')') if a.get('product') else ''}")
+                   f"{('(' + a['product'] + ')') if a.get('product') else ''}{os_note}")
     for a in report["assets"]["binary"]:
         out.append(f"- binary: `{a['host']}`")
     out.append("")
@@ -211,6 +258,19 @@ def render_html(report: dict) -> str:
     for p in report["attack_paths"]:
         chain = " &rarr; ".join([p["steps"][0]["from"]] + [x["to"] for x in p["steps"]])
         paths_html += f"<li><code>{html.escape(p['goal'])}</code>: {html.escape(chain)}</li>"
+
+    hyp = report.get("hypotheses") or {"formulated": [], "validated": []}
+    hyp_rows = ""
+    for h in hyp["formulated"]:
+        badge = ("<span class='badge' style='background:#1e7e34'>VALIDATED</span>"
+                 if h.get("validated") else "<span class='meta'>formulated</span>")
+        hyp_rows += (f"<tr><td>{html.escape(h.get('title', ''))}</td>"
+                     f"<td><code>{html.escape(str(h.get('target', '')))}</code></td>"
+                     f"<td>{int((h.get('confidence') or 0) * 100)}%</td>"
+                     f"<td>+{h.get('priority_boost', 0)}</td><td>{badge}</td></tr>")
+    hyp_html = (f"<table><thead><tr><th>Hypothesis</th><th>Target</th><th>Confidence</th>"
+                f"<th>Priority</th><th>Status</th></tr></thead><tbody>{hyp_rows}</tbody></table>"
+                if hyp_rows else "<p>No hypotheses were formulated.</p>")
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NightTrace report — {html.escape(report['engagement'])}</title>
@@ -220,10 +280,14 @@ def render_html(report: dict) -> str:
  .finding{{border:1px solid #ddd;border-left:5px solid #999;padding:.5rem 1rem;margin:1rem 0;border-radius:6px}}
  .sev-high,.sev-critical{{border-left-color:#c0392b}} .sev-medium{{border-left-color:#e67e22}} .sev-low{{border-left-color:#f1c40f}}
  .meta{{color:#666;font-size:.85em}} .ok{{color:#1e7e34;font-weight:700}} code{{background:#f4f4f4;padding:0 .25rem}}
+ table{{border-collapse:collapse;width:100%;margin:.5rem 0}} th,td{{border:1px solid #ddd;padding:.4rem .6rem;text-align:left;font-size:.9em}} th{{background:#f4f4f4}}
 </style></head><body>
 <h1>NightTrace report</h1>
 <p><strong>{html.escape(report['engagement'])}</strong> · tier {html.escape(report['tier'])} · {report.get('duration_seconds')}s</p>
 <p class="ok">Stray out-of-scope probes: {s.get('stray_probe_attempts', 0)} &nbsp;|&nbsp; Confirmed findings: {report['stats']['confirmed']} &nbsp;|&nbsp; Refuted false alarms: {report['stats']['refuted']}</p>
+<h2>Threat modeling — hypotheses</h2>
+<p class="meta">{sum(1 for h in hyp['formulated'] if h.get('validated'))} of {len(hyp['formulated'])} formulated hypotheses validated with captured evidence.</p>
+{hyp_html}
 <h2>Attack path</h2><ul>{paths_html or '<li>none</li>'}</ul>
 <h2>Confirmed findings</h2>{findings_html}
 <hr><p><em>Authorized, in-scope, non-destructive assessment. Every finding was verified with evidence.</em></p>

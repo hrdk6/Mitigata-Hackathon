@@ -12,6 +12,7 @@ import socket
 import subprocess
 from urllib import error, request
 
+from nighttrace import osfp
 from nighttrace.safety.scope_guard import ScopeGuard
 
 USER_AGENT = "NightTrace/0.1 (authorized-scan; non-destructive)"
@@ -55,6 +56,14 @@ def tcp_scan(guard: ScopeGuard, host: str, ports: list[int] | None = None,
         except OSError:
             pass
     return found
+
+
+def ping_ttl(guard: ScopeGuard, host: str, timeout: float = 1.0) -> int | None:
+    """Scope-checked ICMP echo used for OS fingerprinting. One packet to an
+    in-scope host; returns the reply TTL (128/64/255-class) or None."""
+    if not guard.check_network(host).allowed:
+        return None
+    return osfp.ttl_ping(host, timeout)
 
 
 def has_nmap() -> bool:

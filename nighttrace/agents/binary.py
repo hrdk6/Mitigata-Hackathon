@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from nighttrace.agents.base import Agent
 from nighttrace.models import AgentResult, AssetRec, FindingRec, Ptes, Surface
+from nighttrace.reasoning import hypothesis
 
 
 class BinaryAgent(Agent):
@@ -18,6 +19,9 @@ class BinaryAgent(Agent):
         res = AgentResult()
         res.assets.append(AssetRec(host=path, port=None, service="binary",
                                    surface=Surface.BINARY.value, data={"path": path}))
+        # A present executable is a strong signal for embedded plaintext secrets.
+        res.hypotheses.extend(h.as_dict() for h in
+                              hypothesis.generate_hypotheses("binary_present", path))
 
         target = {"path": path}
         checks = self.engine.applicable("binary", {})

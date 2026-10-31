@@ -65,6 +65,10 @@ def create_app(bb: Blackboard, config: Config) -> FastAPI:
     def attack_path() -> dict:
         return attack_graph.search(bb)
 
+    @app.get("/hypotheses")
+    def hypotheses() -> dict:
+        return reporter.collect_hypotheses(bb.list_events(0, 100000))
+
     @app.get("/events")
     def events(since: int = 0, limit: int = 500) -> dict:
         rows = bb.list_events(since_id=since, limit=limit)

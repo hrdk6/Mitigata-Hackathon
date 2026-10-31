@@ -35,6 +35,13 @@
   .tag{display:inline-block;font:12px ui-monospace,monospace;background:#21262d;border:1px solid var(--line);
        border-radius:5px;padding:1px 7px;margin:2px 3px 2px 0}
   .tag.svc{border-color:#3a2f52;color:#cdb8ff}
+  .os{display:inline-block;font-size:12.5px;font-weight:600;border-radius:5px;padding:1px 8px;border:1px solid var(--line)}
+  .os.windows{color:#79c0ff;border-color:#1f4d78;background:#0d2238}
+  .os.linux{color:#ffd37a;border-color:#5a4a1f;background:#2a2410}
+  .os.macos,.os.apple-mobile{color:#e6c3ff;border-color:#4a2f66;background:#241633}
+  .os.network-device{color:#7ee787;border-color:#1f5a2c;background:#0f2a16}
+  .os.unknown{color:var(--mut)}
+  .conf{font-size:11px;color:var(--mut);margin-left:4px}
   .badge-self{font-size:11px;color:var(--accent);border:1px solid var(--accent);border-radius:10px;padding:1px 7px}
   .count{font-size:26px;font-weight:700}
   .spinner{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;
@@ -88,7 +95,7 @@
     </div>
     <table>
       <thead><tr>
-        <th style="width:34px"></th><th>IP</th><th>Hostname</th><th>MAC</th><th>Open ports / services</th>
+        <th style="width:34px"></th><th>IP</th><th>Hostname</th><th>OS (guess)</th><th>MAC</th><th>Open ports / services</th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -160,10 +167,15 @@ function render(){
   document.getElementById('resultsPanel').style.display = HOSTS.length ? 'block':'none';
   document.getElementById('rows').innerHTML = HOSTS.map((h,i)=>{
     const svc = (h.services||[]).map(s=>`<span class="tag svc">${s.port}${s.service?' '+esc(s.service):''}</span>`).join('') || '<span class="mut">— filtered —</span>';
+    const fam = h.os_family||'unknown';
+    const osCell = fam==='unknown'
+      ? '<span class="os unknown">?</span>'
+      : `<span class="os ${esc(fam)}" title="${esc((h.os_reasons||[]).join(' · '))}">${esc(h.os)}</span><span class="conf">${Math.round((h.os_confidence||0)*100)}%</span>`;
     return `<tr class="${h.is_self?'self':''}">
       <td><input type="checkbox" data-i="${i}" ${h.is_self?'disabled':''} onchange="count_()"></td>
       <td class="ip">${esc(h.ip)} ${h.is_self?'<span class="badge-self">this machine</span>':''}</td>
       <td>${esc(h.hostname)||'<span class="mut">—</span>'}</td>
+      <td>${osCell}</td>
       <td class="ip mut">${esc(h.mac)||'—'}</td>
       <td>${svc}</td></tr>`;
   }).join('');
