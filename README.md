@@ -1,4 +1,4 @@
-# 🌙 NightTrace
+# NightTrace
 
 **An autonomous, multi-agent penetration-testing engine.**
 
@@ -16,58 +16,44 @@ writes one clean report — following the **PTES** methodology, from a single co
 ![Methodology](https://img.shields.io/badge/methodology-PTES-black)
 ![Scope](https://img.shields.io/badge/scope-default--deny-red)
 
-> ⚠️ **Authorized use only.** NightTrace is built for a controlled hackathon lab and for systems
+> **Authorized use only.** NightTrace is built for a controlled hackathon lab and for systems
 > you own or have **explicit written permission** to test. It is non-destructive by design and
-> refuses to act outside its configured scope. See [Safety, Ethics & Responsible Use](#-safety-ethics--responsible-use).
+> refuses to act outside its configured scope. See [Safety, Ethics & Responsible Use](#safety-ethics--responsible-use).
 
 ---
 
-## 🎤 Pitch to judges (30 seconds)
+## Table of contents
 
-> A human red team is three specialists who rarely talk to each other — the web tester, the
-> network scanner, and the binary analyst all look at the same host separately, miss things, and
-> can't see the whole attack path. **NightTrace turns that red team into one coordinated
-> system.** Specialist agents share everything they learn on a common *blackboard*, so a port the
-> recon agent finds is instantly handed to the web agent; a password hard-coded in a binary is
-> instantly tried against the live network. Every finding is **verified with real evidence**
-> before it's reported, every action is tagged with its **PTES phase**, and every outbound packet
-> passes through a hard **scope guard** so nothing out of bounds is ever touched. One command in,
-> one trustworthy report out.
-
----
-
-## 📑 Table of contents
-
-- [The problem](#-the-problem)
-- [What NightTrace does](#-what-nighttrace-does)
-- [System architecture](#-system-architecture)
-- [The Blackboard: how agents coordinate](#-the-blackboard-how-agents-coordinate)
-- [The agents](#-the-agents)
-- [Orchestration: the control loop](#-orchestration-the-control-loop)
-- [Worked example: one finding, end to end](#-worked-example-one-finding-end-to-end)
-- [Reliability & scale](#-reliability--scale)
-- [Safety layer: the Scope Guard](#-safety-layer-the-scope-guard)
-- [Scoped tool layer](#-scoped-tool-layer)
-- [PTES mapping](#-ptes-mapping)
-- [Finding lifecycle & verification](#-finding-lifecycle--verification)
-- [Attack-path chaining & flag capture](#-attack-path-chaining--flag-capture)
-- [Data model](#-data-model)
-- [API & live dashboard](#-api--live-dashboard)
-- [Extensibility: add checks and agents by config](#-extensibility-add-checks-and-agents-by-config)
-- [Tech stack & rationale](#-tech-stack--rationale)
-- [Repository structure](#-repository-structure)
-- [Getting started](#-getting-started)
-- [Configuration reference](#-configuration-reference)
-- [Difficulty tiers](#-difficulty-tiers)
-- [How we hit the scoring targets](#-how-we-hit-the-scoring-targets)
-- [Requirements traceability](#-requirements-traceability)
-- [Safety, ethics & responsible use](#-safety-ethics--responsible-use)
-- [Project status](#-project-status)
-- [Glossary](#-glossary)
+- [The problem](#the-problem)
+- [What NightTrace does](#what-nighttrace-does)
+- [System architecture](#system-architecture)
+- [The Blackboard: how agents coordinate](#the-blackboard-how-agents-coordinate)
+- [The agents](#the-agents)
+- [Orchestration: the control loop](#orchestration-the-control-loop)
+- [Worked example: one finding, end to end](#worked-example-one-finding-end-to-end)
+- [Reliability & scale](#reliability--scale)
+- [Safety layer: the Scope Guard](#safety-layer-the-scope-guard)
+- [Scoped tool layer](#scoped-tool-layer)
+- [PTES mapping](#ptes-mapping)
+- [Finding lifecycle & verification](#finding-lifecycle--verification)
+- [Attack-path chaining & flag capture](#attack-path-chaining--flag-capture)
+- [Data model](#data-model)
+- [API & live dashboard](#api--live-dashboard)
+- [Extensibility: add checks and agents by config](#extensibility-add-checks-and-agents-by-config)
+- [Tech stack & rationale](#tech-stack--rationale)
+- [Repository structure](#repository-structure)
+- [Getting started](#getting-started)
+- [Configuration reference](#configuration-reference)
+- [Difficulty tiers](#difficulty-tiers)
+- [How we hit the scoring targets](#how-we-hit-the-scoring-targets)
+- [Requirements traceability](#requirements-traceability)
+- [Safety, ethics & responsible use](#safety-ethics--responsible-use)
+- [Project status](#project-status)
+- [Glossary](#glossary)
 
 ---
 
-## 🔴 The problem
+## The problem
 
 A penetration test of an unfamiliar network is slow, repetitive, and hard to trust when it's done
 by hand:
@@ -87,7 +73,7 @@ that **nothing outside scope is ever touched**.
 
 ---
 
-## 🟢 What NightTrace does
+## What NightTrace does
 
 NightTrace turns *"here is an IP range and a few binaries"* into *"here is a ranked list of
 **proven**, PTES-labelled findings and the exact path an attacker would take to your crown jewels"* —
@@ -95,19 +81,19 @@ autonomously.
 
 | Capability | What it means |
 |---|---|
-| 🔎 **Discover** | Sweeps the in-scope range for live hosts, open ports, and services. |
-| 🧩 **Cover all three surfaces** | Network, web, **and** binary analysis — not just one. |
-| 🤝 **Coordinate** | Agents write to a shared blackboard and hand work to each other; no duplicated effort. |
-| ✅ **Verify** | Every weakness is *proven* with captured evidence before it counts as a finding. |
-| 🗺️ **Map to PTES** | Every task, finding, and log line is tagged with its PTES phase. |
-| 🔗 **Chain** | Individual findings are linked into a full attack path to the protected host. |
-| 📄 **Report** | One clean PTES report + a queryable API + an optional live dashboard. |
-| 🤖 **Autonomous** | The entire run starts and finishes from a single command — no human input. |
-| 🛡️ **Safe** | Default-deny scope enforcement and a non-destructive policy on every action. |
+| **Discover** | Sweeps the in-scope range for live hosts, open ports, and services. |
+| **Cover all three surfaces** | Network, web, **and** binary analysis — not just one. |
+| **Coordinate** | Agents write to a shared blackboard and hand work to each other; no duplicated effort. |
+| **Verify** | Every weakness is *proven* with captured evidence before it counts as a finding. |
+| **Map to PTES** | Every task, finding, and log line is tagged with its PTES phase. |
+| **Chain** | Individual findings are linked into a full attack path to the protected host. |
+| **Report** | One clean PTES report + a queryable API + an optional live dashboard. |
+| **Autonomous** | The entire run starts and finishes from a single command — no human input. |
+| **Safe** | Default-deny scope enforcement and a non-destructive policy on every action. |
 
 ---
 
-## 🏗️ System architecture
+## System architecture
 
 NightTrace is a classic **blackboard architecture** wrapped around an LLM-driven control loop. A
 central **Orchestrator** plans and dispatches work; **specialist agents** do the surface-specific
@@ -117,23 +103,23 @@ scanning and probing.
 
 ```mermaid
 flowchart TB
-    SCOPE["📜 scope.yaml<br/>IP ranges · hosts · binaries · limits · tier"]
+    SCOPE["scope.yaml<br/>IP ranges · hosts · binaries · limits · tier"]
 
     subgraph Engine["NightTrace Engine"]
         direction TB
-        ORCH["🧠 Orchestrator<br/>control loop · PTES router · budget"]
+        ORCH["Orchestrator<br/>control loop · PTES router · budget"]
         subgraph Agents["Specialist agents"]
             direction LR
-            RECON["🔎 Recon"]
-            WEB["🌐 Web"]
-            BIN["🧬 Binary"]
-            EXP["💥 Exploitation &<br/>Verification"]
-            REP["📄 Reporting"]
+            RECON["Recon"]
+            WEB["Web"]
+            BIN["Binary"]
+            EXP["Exploitation &<br/>Verification"]
+            REP["Reporting"]
         end
-        BB[("🗂️ Blackboard<br/>shared knowledge base")]
+        BB[("Blackboard<br/>shared knowledge base")]
     end
 
-    GUARD{{"🛡️ Scope Guard<br/>default-deny · rate limit · non-destructive"}}
+    GUARD{{"Scope Guard<br/>default-deny · rate limit · non-destructive"}}
 
     subgraph Tools["Scoped tool layer"]
         direction LR
@@ -143,7 +129,7 @@ flowchart TB
         T4["credential & exploit probes"]
     end
 
-    subgraph Targets["🎯 In-scope lab network"]
+    subgraph Targets["In-scope lab network"]
         direction LR
         TN["hosts · ports · services"]
         TBIN["provided binaries"]
@@ -151,9 +137,9 @@ flowchart TB
 
     subgraph Output["Outputs"]
         direction LR
-        API["🔌 REST API"]
-        DASH["📊 Live dashboard"]
-        PTESREP["📑 PTES report + attack path"]
+        API["REST API"]
+        DASH["Live dashboard"]
+        PTESREP["PTES report + attack path"]
     end
 
     SCOPE --> ORCH
@@ -183,7 +169,7 @@ flowchart TB
 
 ---
 
-## 🗂️ The Blackboard: how agents coordinate
+## The Blackboard: how agents coordinate
 
 The **Blackboard** is the shared knowledge base that makes NightTrace a *team* rather than five
 tools in a trench coat. Agents never call each other directly — they **publish what they learn** and
@@ -192,14 +178,14 @@ state plus a deduplicated task queue.
 
 ```mermaid
 flowchart LR
-    RECON["🔎 Recon Agent"] -->|"Asset: 10.10.7.10:80 = http"| BB[("🗂️ Blackboard")]
-    BB -->|"emit Task: web-scan 10.10.7.10:80"| Q["📥 Task queue<br/>deduplicated by (agent, target, check)"]
-    Q --> ORCH["🧠 Orchestrator<br/>routes by surface"]
-    ORCH -->|"web task"| WEB["🌐 Web Agent"]
-    ORCH -->|"binary task"| BIN["🧬 Binary Agent"]
+    RECON["Recon Agent"] -->|"Asset: 10.10.7.10:80 = http"| BB[("Blackboard")]
+    BB -->|"emit Task: web-scan 10.10.7.10:80"| Q["Task queue<br/>deduplicated by (agent, target, check)"]
+    Q --> ORCH["Orchestrator<br/>routes by surface"]
+    ORCH -->|"web task"| WEB["Web Agent"]
+    ORCH -->|"binary task"| BIN["Binary Agent"]
     WEB -->|"Finding #42: default creds (Suspected)"| BB
     BB -->|"emit Task: verify #42"| Q
-    ORCH -->|"verify task"| EXP["💥 Verification Agent"]
+    ORCH -->|"verify task"| EXP["Verification Agent"]
     EXP -->|"Finding #42 → Confirmed + evidence"| BB
     BIN -->|"Finding #27: hard-coded password"| BB
     BB -.->|"cross-surface handoff:<br/>try that password on the network"| Q
@@ -208,7 +194,7 @@ flowchart LR
 **What the Blackboard stores:** discovered **assets** (hosts, ports, services, web endpoints,
 binaries), **findings** (with PTES phase, status, severity, evidence, suggested fix), the **task
 queue**, the **attack graph**, raw **evidence artifacts**, and an **event stream** for the dashboard.
-(Full [data model](#-data-model) below.)
+(Full [data model](#data-model) below.)
 
 **Three mechanisms do the coordinating:**
 
@@ -223,19 +209,19 @@ queue**, the **attack graph**, raw **evidence artifacts**, and an **event stream
 
 ---
 
-## 🕵️ The agents
+## The agents
 
 Each agent is a focused worker with a narrow toolset and a clear PTES role. They share one blackboard
 and one safety layer.
 
 | Agent | Responsibility | Primary tools | Default PTES phase |
 |---|---|---|---|
-| 🧠 **Orchestrator** | Plans the engagement, dispatches & dedupes tasks, enforces the time/rate budget, tags PTES phases, decides when the run is complete, triggers reporting. | LangGraph control loop | Threat Modeling |
-| 🔎 **Recon Agent** | Finds live hosts, open ports, services, and versions across the in-scope range; seeds the blackboard with assets. | `nmap`, `masscan` | Intelligence Gathering |
-| 🌐 **Web Agent** | Crawls web apps, enumerates endpoints (`/login`, `/admin`, …), flags common issues (reflected input, default creds, exposed files, injection indicators). | Katana, OWASP ZAP, HTTP client | Vulnerability Analysis |
-| 🧬 **Binary Agent** | Statically analyses provided binaries for hard-coded secrets, unsafe functions (`gets`, `strcpy`, `system`), missing mitigations, weak crypto. | Ghidra (headless), radare2, angr | Vulnerability Analysis |
-| 💥 **Exploitation & Verification Agent** | Takes *suspected* findings and **proves** them with a safe, non-destructive action (log in with the default password, send a marked payload, read a flag). Promotes `Suspected → Confirmed` with captured evidence. | Scoped credential / payload probes | Exploitation |
-| 📄 **Reporting Agent** | Assembles the PTES-structured report, orders findings by severity, reconstructs the attack path, and writes plain-English fixes. | LLM synthesis over the blackboard | Reporting |
+| **Orchestrator** | Plans the engagement, dispatches & dedupes tasks, enforces the time/rate budget, tags PTES phases, decides when the run is complete, triggers reporting. | LangGraph control loop | Threat Modeling |
+| **Recon Agent** | Finds live hosts, open ports, services, and versions across the in-scope range; seeds the blackboard with assets. | `nmap`, `masscan` | Intelligence Gathering |
+| **Web Agent** | Crawls web apps, enumerates endpoints (`/login`, `/admin`, …), flags common issues (reflected input, default creds, exposed files, injection indicators). | Katana, OWASP ZAP, HTTP client | Vulnerability Analysis |
+| **Binary Agent** | Statically analyses provided binaries for hard-coded secrets, unsafe functions (`gets`, `strcpy`, `system`), missing mitigations, weak crypto. | Ghidra (headless), radare2, angr | Vulnerability Analysis |
+| **Exploitation & Verification Agent** | Takes *suspected* findings and **proves** them with a safe, non-destructive action (log in with the default password, send a marked payload, read a flag). Promotes `Suspected → Confirmed` with captured evidence. | Scoped credential / payload probes | Exploitation |
+| **Reporting Agent** | Assembles the PTES-structured report, orders findings by severity, reconstructs the attack path, and writes plain-English fixes. | LLM synthesis over the blackboard | Reporting |
 
 > Agents are **model-tiered for speed**: the Orchestrator and Reporting agent use a stronger
 > planning model (Claude Opus-class); the high-volume Recon/Web/Binary loops can use a faster
@@ -243,7 +229,7 @@ and one safety layer.
 
 ---
 
-## 🧠 Orchestration: the control loop
+## Orchestration: the control loop
 
 NightTrace runs as a **stateful graph** (built with **LangGraph**). The shared state *is* the
 blackboard; nodes are the Orchestrator and the agents; conditional edges route work by surface and
@@ -284,7 +270,7 @@ stateDiagram-v2
 
 ---
 
-## 🎬 Worked example: one finding, end to end
+## Worked example: one finding, end to end
 
 A single run tracing one weakness from discovery to a proven, reported finding — showing the
 hand-offs between agents, the scope check on **every** action, and the `Suspected → Confirmed`
@@ -294,13 +280,13 @@ promotion that makes the finding trustworthy.
 sequenceDiagram
     autonumber
     participant U as User
-    participant O as 🧠 Orchestrator
-    participant R as 🔎 Recon
-    participant G as 🛡️ Scope Guard
-    participant W as 🌐 Web
-    participant V as 💥 Verification
-    participant B as 🗂️ Blackboard
-    participant Rep as 📄 Reporting
+    participant O as Orchestrator
+    participant R as Recon
+    participant G as Scope Guard
+    participant W as Web
+    participant V as Verification
+    participant B as Blackboard
+    participant Rep as Reporting
 
     U->>O: nighttrace run --scope scope.yaml
     O->>R: discovery task (Intelligence Gathering)
@@ -329,7 +315,7 @@ finding is only called `Confirmed` **after** a real login succeeded and evidence
 
 ---
 
-## 🧯 Reliability & scale
+## Reliability & scale
 
 Autonomy only counts if the run survives the messy middle — a tool that hangs, a crash, a blackboard
 that grows faster than any single prompt can hold. Three mechanisms keep a run finishing cleanly and
@@ -349,7 +335,7 @@ on time.
 
 ---
 
-## 🛡️ Safety layer: the Scope Guard
+## Safety layer: the Scope Guard
 
 The **Scope Guard** is the single most important component for both **ethics** and **score** (the
 rubric penalises any out-of-scope probe). It is a **mandatory chokepoint**: every tool invocation —
@@ -357,17 +343,17 @@ without exception — is validated here before a single packet leaves the engine
 
 ```mermaid
 flowchart TB
-    A["Agent wants to run a tool<br/>on target T"] --> G{{"🛡️ Scope Guard"}}
+    A["Agent wants to run a tool<br/>on target T"] --> G{{"Scope Guard"}}
     G --> C1{"T in allow-list?<br/>(CIDR / host / binary path)"}
-    C1 -->|no| BLOCK["⛔ Blocked + logged<br/>(counts as zero stray probes)"]
+    C1 -->|no| BLOCK["Blocked + logged<br/>(counts as zero stray probes)"]
     C1 -->|yes| C2{"T in exclude-list?"}
     C2 -->|yes| BLOCK
     C2 -->|no| C3{"Action non-destructive?<br/>no DoS · no data loss"}
     C3 -->|no| BLOCK
     C3 -->|yes| C4{"Within rate / time budget?"}
     C4 -->|no| QUEUE["⏳ Throttle / defer"]
-    C4 -->|yes| ALLOW["✅ Execute via tool layer"]
-    ALLOW --> EV["📸 Record evidence + event"]
+    C4 -->|yes| ALLOW["Execute via tool layer"]
+    ALLOW --> EV["Record evidence + event"]
 ```
 
 - **Default-deny.** If a target isn't explicitly in scope, it's blocked. The allow-list is CIDR
@@ -395,7 +381,7 @@ banners, strings pulled from binaries. Any of it could carry a prompt-injection 
 
 ---
 
-## 🧰 Scoped tool layer
+## Scoped tool layer
 
 Agents don't run raw shell commands. They call **typed tool wrappers** with a uniform contract:
 
@@ -406,7 +392,7 @@ scope-check  →  execute (sandboxed subprocess/container)  →  parse to struct
 Each wrapper (1) asks the Scope Guard for permission, (2) runs the underlying utility in a sandbox,
 (3) **parses raw output into structured assets/findings** rather than dumping text, and (4) attaches
 evidence. Because tools are a registry of declarative capabilities, **new checks can be added by
-config** (see [Extensibility](#-extensibility-add-checks-and-agents-by-config)).
+config** (see [Extensibility](#extensibility-add-checks-and-agents-by-config)).
 
 | Surface | Tools | Example structured output |
 |---|---|---|
@@ -417,7 +403,7 @@ config** (see [Extensibility](#-extensibility-add-checks-and-agents-by-config)).
 
 ---
 
-## 🗺️ PTES mapping
+## PTES mapping
 
 Every step NightTrace takes is tagged with its **PTES** (Penetration Testing Execution Standard)
 phase (FR-5), and the final report is structured along these phases. This makes the run legible to a
@@ -451,7 +437,7 @@ the newly reachable segment, so the loop deepens until the budget is spent.
 
 ---
 
-## ✅ Finding lifecycle & verification
+## Finding lifecycle & verification
 
 The difference between a scanner and a pentester is **proof**. NightTrace models every weakness as a
 state machine, and **only `Confirmed` findings with attached evidence appear in the report** (FR-6).
@@ -486,7 +472,7 @@ most reachable issues are read first.
 
 ---
 
-## 🔗 Attack-path chaining & flag capture
+## Attack-path chaining & flag capture
 
 Individual findings are useful; a **chain** is what a real attacker uses. NightTrace maintains an
 **attack graph** on the blackboard: nodes are *states* an attacker can be in (external, a foothold, a
@@ -496,10 +482,10 @@ host (bonus **B-1** and **B-2**).
 
 ```mermaid
 flowchart LR
-    EXT(("🌍 External<br/>attacker")) -->|"exposed .git leaks DB creds<br/>Finding #11"| DB["🗄️ DB access<br/>10.10.7.12:5432"]
-    DB -->|"creds reused for SSH<br/>Finding #19"| SSH["🖥️ Foothold<br/>10.10.7.15 (SSH)"]
-    SSH -->|"binary hard-codes admin pw<br/>Finding #27"| ADM["🔑 Admin on<br/>app server"]
-    ADM -->|"pivot to protected segment<br/>Finding #31"| CJ(("👑 Crown jewel<br/>10.10.7.50<br/>FLAG{...}"))
+    EXT(("External<br/>attacker")) -->|"exposed .git leaks DB creds<br/>Finding #11"| DB["DB access<br/>10.10.7.12:5432"]
+    DB -->|"creds reused for SSH<br/>Finding #19"| SSH["Foothold<br/>10.10.7.15 (SSH)"]
+    SSH -->|"binary hard-codes admin pw<br/>Finding #27"| ADM["Admin on<br/>app server"]
+    ADM -->|"pivot to protected segment<br/>Finding #31"| CJ(("Crown jewel<br/>10.10.7.50<br/>FLAG{...}"))
 ```
 
 This is also what closes the loop between surfaces: Finding #27 is a *binary* finding that only
@@ -508,7 +494,7 @@ two medium findings into one critical path.
 
 ---
 
-## 🧱 Data model
+## Data model
 
 The blackboard is backed by a small, explicit schema (PostgreSQL in Compose; SQLite for a zero-dependency
 local run). Everything an assessor needs to trust the result is persisted: what was found, which
@@ -577,7 +563,7 @@ erDiagram
 
 ---
 
-## 🔌 API & live dashboard
+## API & live dashboard
 
 A small **FastAPI** service exposes the blackboard (FR-7), and an optional dashboard subscribes to
 the event stream to show each agent working in real time (bonus **B-5**).
@@ -613,8 +599,8 @@ GET  /events                       # Server-Sent Events: live agent activity (da
 
 ```mermaid
 flowchart LR
-    BB[("🗂️ Blackboard")] --> API["🔌 FastAPI"]
-    API -->|"/events (SSE)"| DASH["📊 Dashboard"]
+    BB[("Blackboard")] --> API["FastAPI"]
+    API -->|"/events (SSE)"| DASH["Dashboard"]
     DASH --> V1["agent activity timeline"]
     DASH --> V2["findings by surface & severity"]
     DASH --> V3["live attack graph"]
@@ -623,7 +609,7 @@ flowchart LR
 
 ---
 
-## 🧩 Extensibility: add checks and agents by config
+## Extensibility: add checks and agents by config
 
 Bonus **B-4** asks for new checks *without writing code*. In NightTrace, **checks are data**. A check
 declares when it applies, how to probe, and how to verify — the engine runs it like any built-in.
@@ -661,7 +647,7 @@ agents:
 
 ---
 
-## 🧪 Tech stack & rationale
+## Tech stack & rationale
 
 | Layer | Choice | Why |
 |---|---|---|
@@ -677,7 +663,7 @@ agents:
 
 ---
 
-## 📂 Repository structure
+## Repository structure
 
 ```text
 nighttrace/
@@ -719,7 +705,7 @@ Dockerfile · docker-compose.yml · requirements.txt · pyproject.toml
 
 ---
 
-## 🚀 Getting started
+## Getting started
 
 > **Prerequisites:** Python 3.11+ (or Docker). **No API key or external service is required** — the
 > engine runs fully offline on the Python standard library. Set `ANTHROPIC_API_KEY` only to enable the
@@ -824,7 +810,7 @@ provide one.
 
 ---
 
-## ⚙️ Configuration reference
+## Configuration reference
 
 The entire engagement is driven by one file — this is the only thing a judge has to edit.
 
@@ -855,7 +841,7 @@ flags:
 
 ---
 
-## ⚖️ Difficulty tiers
+## Difficulty tiers
 
 Teams pick one tier at kickoff; NightTrace reads it from `scope.yaml` and scales its own depth and
 budget to match — so the engine does as much as the tier rewards, and no more.
@@ -872,7 +858,7 @@ the config.
 
 ---
 
-## 🎯 How we hit the scoring targets
+## How we hit the scoring targets
 
 The architecture is designed backwards from the rubric. Each "Great" column maps to a specific design
 decision:
@@ -897,7 +883,7 @@ by the audit trail.
 
 ---
 
-## 🧾 Requirements traceability
+## Requirements traceability
 
 Direct mapping from the PRD to the components that satisfy it.
 
@@ -918,7 +904,7 @@ Direct mapping from the PRD to the components that satisfy it.
 
 ---
 
-## 🔐 Safety, ethics & responsible use
+## Safety, ethics & responsible use
 
 Penetration testing is legal and ethical **only with authorization and scope**. NightTrace is built
 so those constraints are structural, not optional:
@@ -936,7 +922,7 @@ so those constraints are structural, not optional:
 
 ---
 
-## 📈 Project status
+## Project status
 
 A **working reference implementation** is in this repository and passes its test suite (12 tests,
 including an end-to-end run against the bundled lab). It implements the full architecture above:
@@ -958,7 +944,7 @@ to localhost only, so the whole thing is runnable and authorized by construction
 
 ---
 
-## 📖 Glossary
+## Glossary
 
 - **PTES** — Penetration Testing Execution Standard; the seven-phase methodology the run is mapped to.
 - **Blackboard architecture** — a shared knowledge store that independent specialist "knowledge

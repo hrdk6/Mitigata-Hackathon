@@ -221,7 +221,7 @@ def render_html(report: dict) -> str:
  .sev-high,.sev-critical{{border-left-color:#c0392b}} .sev-medium{{border-left-color:#e67e22}} .sev-low{{border-left-color:#f1c40f}}
  .meta{{color:#666;font-size:.85em}} .ok{{color:#1e7e34;font-weight:700}} code{{background:#f4f4f4;padding:0 .25rem}}
 </style></head><body>
-<h1>🌙 NightTrace report</h1>
+<h1>NightTrace report</h1>
 <p><strong>{html.escape(report['engagement'])}</strong> · tier {html.escape(report['tier'])} · {report.get('duration_seconds')}s</p>
 <p class="ok">Stray out-of-scope probes: {s.get('stray_probe_attempts', 0)} &nbsp;|&nbsp; Confirmed findings: {report['stats']['confirmed']} &nbsp;|&nbsp; Refuted false alarms: {report['stats']['refuted']}</p>
 <h2>Attack path</h2><ul>{paths_html or '<li>none</li>'}</ul>
