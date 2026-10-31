@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NightTrace — scope</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--fg:#e6edf3;--mut:#8b949e;--accent:#7E56C2;
+        --ok:#3fb950;--med:#e3853d;--hi:#f85149}
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.5 system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--fg)}
+  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  header h1{margin:0;font-size:20px}
+  .mut{color:var(--mut)}
+  .nav{margin-left:auto;display:flex;gap:10px}
+  .nav a{color:var(--mut);text-decoration:none;font-size:13px}
+  .nav a:hover{color:var(--fg)}
+  .wrap{max-width:900px;margin:0 auto;padding:18px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .full{grid-column:1/3}
+  label{display:block;font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
+  .sub{font-size:11px;text-transform:none;letter-spacing:0;color:var(--mut)}
+  input,select,textarea{width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);
+    border-radius:6px;padding:8px 10px;font:14px ui-monospace,Consolas,monospace}
+  textarea{min-height:92px;resize:vertical}
+  .btn{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border-radius:6px;border:1px solid var(--line);
+       background:var(--panel);color:var(--fg);text-decoration:none;font-size:14px;font-weight:600;cursor:pointer}
+  .btn:hover{background:#21262d;border-color:var(--accent);color:#fff}
+  .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn-primary:hover{background:#6a42b0}
+  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .hint{font-size:12.5px;color:var(--mut);margin-top:6px}
+  .msg{margin-top:10px;font-size:13px}
+  .err{color:var(--hi)} .okmsg{color:var(--ok)}
+  ul.errs{margin:6px 0 0;padding-left:18px;color:var(--hi);font-size:13px}
+  pre{background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;
+      font:13px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap}
+  .note{border-left:3px solid var(--accent);padding:6px 10px;background:#1a1430;border-radius:4px;font-size:12.5px;color:#cdb8ff}
+  @media(max-width:720px){.grid{grid-template-columns:1fr}.full{grid-column:auto}}
+</style>
+</head>
+<body>
+<header>
+  <h1>NightTrace · Scope</h1>
+  <span class="mut" id="sub">calibrate what the agents may touch</span>
+  <div class="nav">
+    <a href="/discover">Discover hosts</a>
+    <a href="/">Dashboard</a>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="panel">
+    <div class="grid">
+      <div>
+        <label for="engagement">Engagement name</label>
+        <input type="text" id="engagement" placeholder="hackathon-engagement">
+      </div>
+      <div>
+        <label for="tier">Tier <span class="sub">— surfaces & scoring</span></label>
+        <select id="tier">
+          <option value="recon">recon — network + web (1.0x)</option>
+          <option value="breach" selected>breach — + binary, chaining (1.3x)</option>
+          <option value="deep">deep — aggressive multi-hop (1.6x)</option>
+        </select>
+      </div>
+
+      <div class="full">
+        <label for="networks">Networks <span class="sub">— one CIDR per line, e.g. 192.168.60.0/24</span></label>
+        <textarea id="networks" placeholder="192.168.60.0/24"></textarea>
+      </div>
+      <div>
+        <label for="hosts">Hosts <span class="sub">— one IP/hostname per line</span></label>
+        <textarea id="hosts" placeholder="192.168.60.50"></textarea>
+      </div>
+      <div>
+        <label for="exclude">Exclude <span class="sub">— always wins (gateway, etc.)</span></label>
+        <textarea id="exclude" placeholder="192.168.60.1"></textarea>
+      </div>
+      <div class="full">
+        <label for="binaries">Binaries <span class="sub">— one file path per line (static analysis)</span></label>
+        <textarea id="binaries" placeholder="./targets/bin/auth_service"></textarea>
+      </div>
+
+      <div>
+        <label for="ports">Ports <span class="sub">— comma-separated, empty = default list</span></label>
+        <input type="text" id="ports" placeholder="22, 80, 443, 3306, 8080">
+      </div>
+      <div class="bar" style="align-items:flex-end">
+        <div style="flex:1">
+          <label for="mrt">Max runtime (min)</label>
+          <input type="text" id="mrt" value="20">
+        </div>
+        <div style="flex:1">
+          <label for="rpp">Rate limit (pps)</label>
+          <input type="text" id="rpp" value="50">
+        </div>
+      </div>
+    </div>
+
+    <div class="note" style="margin-top:14px">
+      Default-deny: only what you list here is ever touched, and <b>exclude</b> overrides the allow-list.
+      <b>destructive</b> is forced off — NightTrace is non-destructive by design. Only scope networks you are authorized to assess.
+    </div>
+
+    <div class="bar" style="margin-top:14px">
+      <button class="btn btn-primary" id="saveBtn" onclick="save()">Save scope.yaml</button>
+      <button class="btn" onclick="load()">Reload current</button>
+      <span class="msg" id="msg"></span>
+    </div>
+  </div>
+
+  <div class="panel" id="outPanel" style="display:none">
+    <div class="bar"><strong>Written</strong><span class="okmsg" id="outPath"></span></div>
+    <pre id="outYaml"></pre>
+    <div class="hint">Run the engagement against exactly this scope:</div>
+    <pre id="runCmd"></pre>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function msg(t,cls){ $('msg').innerHTML = t ? `<span class="${cls||''}">${t}</span>` : ''; }
+function toLines(a){ return (a||[]).join('\n'); }
+function fromLines(v){ return (v||'').split(/[\r\n]+/).map(s=>s.trim()).filter(Boolean); }
+
+async function load(){
+  msg('loading…');
+  try{
+    const d = await (await fetch('/scope')).json();
+    const s = d.scope || {}; const sc = s.scope || {}; const lim = s.limits || {};
+    $('engagement').value = s.engagement || '';
+    $('tier').value = s.tier || 'breach';
+    $('networks').value = toLines(sc.networks);
+    $('hosts').value = toLines(sc.hosts);
+    $('exclude').value = toLines(sc.exclude);
+    $('binaries').value = toLines(sc.binaries);
+    $('ports').value = (sc.ports || []).join(', ');
+    if(lim.max_runtime_minutes!=null) $('mrt').value = lim.max_runtime_minutes;
+    if(lim.rate_limit_pps!=null) $('rpp').value = lim.rate_limit_pps;
+    $('sub').textContent = d.exists ? `editing ${d.path}` : 'no scope.yaml yet — this will create it';
+    msg(d.error ? ('current file error: '+esc(d.error)) : '', d.error?'err':'');
+  }catch(e){ msg('could not load current scope: '+esc(e.message),'err'); }
+}
+
+async function save(){
+  const ports = ($('ports').value||'').split(/[,\s]+/).map(s=>s.trim()).filter(Boolean);
+  const body = {
+    engagement: $('engagement').value.trim(),
+    tier: $('tier').value,
+    networks: fromLines($('networks').value),
+    hosts: fromLines($('hosts').value),
+    exclude: fromLines($('exclude').value),
+    binaries: fromLines($('binaries').value),
+    ports,
+    max_runtime_minutes: $('mrt').value.trim(),
+    rate_limit_pps: $('rpp').value.trim(),
+  };
+  $('saveBtn').disabled = true; msg('saving…');
+  try{
+    const r = await fetch('/scope',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d = await r.json();
+    if(!r.ok){
+      const list = (d.errors||['save failed']).map(e=>`<li>${esc(e)}</li>`).join('');
+      msg('could not save:','err'); $('msg').innerHTML += `<ul class="errs">${list}</ul>`;
+      $('outPanel').style.display='none';
+      return;
+    }
+    msg('saved — scope is live for the next run', 'okmsg');
+    $('outPanel').style.display='block';
+    $('outPath').textContent = ' → '+d.path;
+    $('outYaml').textContent = d.yaml;
+    $('runCmd').textContent = d.run;
+    $('outPanel').scrollIntoView({behavior:'smooth'});
+  }catch(e){ msg('save error: '+esc(e.message),'err'); }
+  finally{ $('saveBtn').disabled = false; }
+}
+
+load();
+</script>
+</body>
+</html>

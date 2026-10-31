@@ -13,11 +13,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from nighttrace import attack_graph, netdiscover, reporter, scoring
 from nighttrace.blackboard import Blackboard
-from nighttrace.config import Config
+from nighttrace.config import TIERS, Config, load_scope
 
 _DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"
 _DASHBOARD = _DASHBOARD_DIR / "index.html"
 _DISCOVER = _DASHBOARD_DIR / "discover.html"
+_SCOPE_EDITOR = _DASHBOARD_DIR / "scope.html"
 _ROOT = Path(__file__).resolve().parent.parent.parent
 _CONFIG = _ROOT / "config"
 
@@ -114,6 +115,104 @@ def create_app(bb: Blackboard, config: Config) -> FastAPI:
             return netdiscover.scan_network(cidr, timeout=max(0.1, min(timeout, 2.0)))
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+
+    # -- scope calibration (edit config/scope.yaml from the UI) --------------
+    @app.get("/scope-editor", response_class=HTMLResponse)
+    def scope_editor_page() -> str:
+        try:
+            return _SCOPE_EDITOR.read_text(encoding="utf-8")
+        except OSError:
+            return "<h1>NightTrace</h1><p>Scope editor asset missing.</p>"
+
+    @app.get("/scope")
+    def get_scope():
+        """Return config/scope.yaml for the form to prefill, or a template seeded
+        from the running engagement when no file exists yet."""
+        import yaml
+        dest = _CONFIG / "scope.yaml"
+        if dest.is_file():
+            try:
+                return {"exists": True, "path": str(dest),
+                        "scope": yaml.safe_load(dest.read_text(encoding="utf-8")) or {}}
+            except Exception as exc:  # malformed file: let the UI show it
+                return {"exists": True, "path": str(dest), "error": str(exc)}
+        return {"exists": False, "path": str(dest), "scope": {
+            "engagement": config.engagement, "tier": config.tier,
+            "scope": {"networks": [], "hosts": [], "binaries": [], "exclude": [], "ports": []},
+            "limits": {"max_runtime_minutes": config.limits.max_runtime_minutes,
+                       "rate_limit_pps": config.limits.rate_limit_pps, "destructive": False},
+            "flags": {"pattern": config.flag_pattern}}}
+
+    @app.post("/scope")
+    def save_scope(payload: dict = Body(default={})):
+        """Validate a full scope payload and write config/scope.yaml. Destructive
+        mode is forced off — the engine is non-destructive by design."""
+        import ipaddress
+        import yaml
+        payload = payload or {}
+        errors: list[str] = []
+
+        def _clean(v):
+            return [s.strip() for s in (v or []) if str(s).strip()]
+
+        networks, hosts = _clean(payload.get("networks")), _clean(payload.get("hosts"))
+        binaries, exclude = _clean(payload.get("binaries")), _clean(payload.get("exclude"))
+        for n in networks:
+            try:
+                ipaddress.ip_network(n, strict=False)
+            except ValueError:
+                errors.append(f"invalid network CIDR: {n}")
+
+        tier = str(payload.get("tier", "breach")).lower()
+        if tier not in TIERS:
+            errors.append(f"unknown tier '{tier}' (choose {', '.join(sorted(TIERS))})")
+
+        ports: list[int] = []
+        for p in (payload.get("ports") or []):
+            try:
+                pi = int(p)
+                ports.append(pi) if 1 <= pi <= 65535 else errors.append(f"port out of range: {p}")
+            except (TypeError, ValueError):
+                errors.append(f"invalid port: {p}")
+
+        if not (networks or hosts or binaries):
+            errors.append("scope is empty — add at least one network, host, or binary")
+
+        try:
+            mrt = float(payload.get("max_runtime_minutes", 20))
+            if mrt <= 0:
+                errors.append("max_runtime_minutes must be > 0")
+        except (TypeError, ValueError):
+            errors.append("invalid max_runtime_minutes"); mrt = 20.0
+        try:
+            rpp = int(payload.get("rate_limit_pps", 50))
+            if rpp <= 0:
+                errors.append("rate_limit_pps must be > 0")
+        except (TypeError, ValueError):
+            errors.append("invalid rate_limit_pps"); rpp = 50
+
+        if errors:
+            return JSONResponse({"errors": errors}, status_code=400)
+
+        doc = {
+            "engagement": str(payload.get("engagement") or "engagement"),
+            "tier": tier,
+            "scope": {"networks": networks, "hosts": hosts, "binaries": binaries,
+                      "exclude": exclude, "ports": ports},
+            "limits": {"max_runtime_minutes": mrt, "rate_limit_pps": rpp, "destructive": False},
+            "flags": {"pattern": config.flag_pattern},
+        }
+        text = yaml.safe_dump(doc, sort_keys=False)
+        _CONFIG.mkdir(parents=True, exist_ok=True)
+        dest = _CONFIG / "scope.yaml"
+        dest.write_text(text, encoding="utf-8")
+        try:  # confirm the engine will accept what we just wrote
+            load_scope(dest)
+        except Exception as exc:
+            return JSONResponse({"errors": [f"written but failed validation: {exc}"], "yaml": text},
+                                status_code=400)
+        return {"path": str(dest), "yaml": text,
+                "run": "python -m nighttrace run --scope config/scope.yaml --out reports"}
 
     @app.post("/network/scope")
     def network_scope(payload: dict = Body(default={})):
