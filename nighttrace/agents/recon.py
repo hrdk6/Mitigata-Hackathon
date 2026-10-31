@@ -59,14 +59,25 @@ class ReconAgent(Agent):
             else:
                 hosts = candidates
 
-        # A URL-scoped recon task carries its own port list (just the web port);
-        # otherwise fall back to the engagement's configured ports, then defaults.
-        ports = target.get("ports") or self.config.scope.ports or None
-        via = "nmap" if tools.has_nmap() else "connect-scan"
+        # Choose scan breadth: a URL-scoped task pins its own web port; a
+        # configured `ports:` list is honored; a subnet sweep uses the broad
+        # COMMON_PORTS; and a single named host is scanned in FULL (every port),
+        # because that is the only way to find a service hiding on a non-standard
+        # port (e.g. an admin panel on :1111) — which a 35-port list would miss.
+        if target.get("ports"):
+            ports, full = [int(p) for p in target["ports"]], False
+        elif self.config.scope.ports:
+            ports, full = self.config.scope.ports, False
+        else:
+            # Default (single host or subnet) = the broad COMMON_PORTS sweep,
+            # which is fast and already covers non-standard ports like :1111.
+            # A full every-port scan is opt-in via `full_ports: true`/`ports: all`.
+            ports, full = None, (self.config.scope.full_ports and not target.get("network"))
+        via = ("nmap -p-" if full else "nmap") if tools.has_nmap() else "connect-scan"
         arp = netdiscover.arp_table()  # best-effort MAC map for OS fingerprinting
         for host in hosts:
             open_ports = tools.discover(self.guard, host, ports,
-                                        timeout=self.config.limits.connect_timeout)
+                                        timeout=self.config.limits.connect_timeout, full=full)
             if open_ports:
                 listing = ", ".join(str(d["port"]) for d in open_ports)
                 self.emit("port_scan", Ptes.INTEL_GATHERING.value,

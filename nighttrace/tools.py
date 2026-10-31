@@ -8,6 +8,8 @@ directly — they go through here, so the safety guarantee holds everywhere.
 from __future__ import annotations
 
 import http.client
+import json
+import os
 import shutil
 import socket
 import subprocess
@@ -26,6 +28,24 @@ DEFAULT_PORTS = [
     1433, 1521, 2049, 3000, 3306, 3389, 5000, 5432, 5900, 6379,
     8000, 8008, 8080, 8081, 8443, 8833, 8888, 9000, 9200, 11211, 27017,
 ]
+
+# A broad sweep used for network ranges and as the default per host: the common
+# service ports plus the ones CTF/lab/app targets habitually hide on (e.g. an
+# HTTP admin panel on :1111, :1337 or :8834). Wide enough to stop missing a
+# non-standard service without paying a full 65535-port scan on every host.
+COMMON_PORTS = sorted(set(DEFAULT_PORTS) | {
+    81, 88, 123, 389, 465, 514, 587, 636, 873, 990, 1080, 1111, 1194, 1234,
+    1337, 1723, 1883, 2082, 2083, 2181, 2375, 2376, 3001, 3128, 3268, 3690,
+    4000, 4040, 4200, 4280, 4443, 4567, 4848, 5001, 5044, 5060, 5601, 5672,
+    5985, 6000, 6443, 6667, 7000, 7001, 7077, 7443, 7777, 8001, 8009, 8010,
+    8069, 8086, 8088, 8090, 8161, 8333, 8500, 8530, 8834, 8983, 9001, 9002,
+    9042, 9080, 9090, 9091, 9300, 9443, 9999, 10000, 10250, 15672, 27018,
+    50000, 61616,
+})
+
+# Full scan: every application port. nmap does all 65535 fast with -p-; the
+# built-in connect scanner covers 1-10000, where essentially all services live.
+FULL_PORTS = list(range(1, 10001))
 
 # Ports we treat as HTTP(S) for the web agent.
 HTTP_PORTS = {80, 591, 3000, 5000, 8000, 8008, 8080, 8081, 8888, 9000}
@@ -47,14 +67,15 @@ _opener = request.build_opener(_NoRedirect)
 
 
 def tcp_scan(guard: ScopeGuard, host: str, ports: list[int] | None = None,
-             timeout: float = 1.5, workers: int = 32) -> list[dict]:
+             timeout: float = 1.5, workers: int = 100) -> list[dict]:
     """Non-destructive TCP connect scan. Returns [{port, service, product, banner}, ...].
 
     Ports are probed concurrently (the Scope Guard is thread-safe and still gates
     and paces every connection), so a tolerant per-port timeout — needed so real
-    WiFi/LAN latency does not hide slow-to-answer open ports — stays fast.
+    WiFi/LAN latency does not hide slow-to-answer open ports — stays fast even over
+    a wide range.
     """
-    ports = ports or DEFAULT_PORTS
+    ports = ports or COMMON_PORTS
 
     def _probe(port: int) -> dict | None:
         if not guard.check_network(host, port).allowed:
@@ -86,20 +107,24 @@ def has_nmap() -> bool:
     return shutil.which("nmap") is not None
 
 
-def nmap_scan(guard: ScopeGuard, host: str, ports: list[int] | None = None) -> list[dict]:
+def nmap_scan(guard: ScopeGuard, host: str, ports: list[int] | None = None,
+              full: bool = False) -> list[dict]:
     """Discovery via nmap when available — richer service/version detection.
 
     Non-destructive: a TCP connect scan (-sT) with version detection (-sV). The
-    host is scope-checked before nmap runs, and only our port list is scanned.
+    host is scope-checked before nmap runs. `full` scans all 65535 ports (-p-),
+    which is how non-standard services (an admin panel on :1111) get found;
+    otherwise only the given port list is scanned.
     """
     if not guard.check_network(host).allowed:
         return []
-    port_arg = ",".join(str(p) for p in (ports or DEFAULT_PORTS))
     rate = max(guard.config.limits.rate_limit_pps, 10)
-    cmd = ["nmap", "-Pn", "-sT", "-sV", "--open", "-oG", "-",
-           "--max-rate", str(rate), "-p", port_arg, host]
+    cmd = ["nmap", "-Pn", "-sT", "-sV", "--open", "-oG", "-", "--max-rate", str(rate)]
+    cmd += ["-p-"] if full else ["-p", ",".join(str(p) for p in (ports or COMMON_PORTS))]
+    cmd.append(host)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        # A full -p- sweep needs a longer budget than a focused port list.
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900 if full else 300)
     except (OSError, subprocess.TimeoutExpired):
         return []
     out: list[dict] = []
@@ -120,13 +145,18 @@ def nmap_scan(guard: ScopeGuard, host: str, ports: list[int] | None = None) -> l
 
 
 def discover(guard: ScopeGuard, host: str, ports: list[int] | None = None,
-             timeout: float = 1.5) -> list[dict]:
-    """Pick the best available discovery method: nmap if present, else connect scan."""
+             timeout: float = 1.5, full: bool = False) -> list[dict]:
+    """Pick the best available discovery method: nmap if present, else connect scan.
+
+    `ports` pins an exact list; otherwise `full` scans everything (all ports via
+    nmap -p-, or 1-10000 built-in) and the default is the broad COMMON_PORTS sweep.
+    """
+    scan_ports = ports or (FULL_PORTS if full else COMMON_PORTS)
     if has_nmap():
-        res = nmap_scan(guard, host, ports)
+        res = nmap_scan(guard, host, ports=ports, full=full)
         if res:
             return res
-    return tcp_scan(guard, host, ports, timeout=timeout)
+    return tcp_scan(guard, host, scan_ports, timeout=timeout)
 
 
 # A short port list used only to answer "is this host up?" before a full scan.
@@ -229,3 +259,65 @@ def read_binary(guard: ScopeGuard, path: str, max_bytes: int = 20_000_000) -> by
 def base_url_for(host: str, port: int, scheme: str | None = None) -> str:
     scheme = scheme or ("https" if port in HTTPS_PORTS else "http")
     return f"{scheme}://{host}:{port}"
+
+
+# -- external engine: nuclei (community vulnerability templates) --------------
+def has_nuclei() -> bool:
+    return shutil.which("nuclei") is not None
+
+
+def _nuclei_templates_present() -> bool:
+    """True only if nuclei's templates are already installed. Without this guard,
+    nuclei would try to download ~9000 templates mid-scan and stall the web task
+    until its timeout — so we skip nuclei entirely until templates exist."""
+    dirs = [os.environ.get("NUCLEI_TEMPLATES_DIR", ""),
+            os.path.expanduser("~/.config/nuclei-templates"),
+            os.path.expanduser("~/nuclei-templates")]
+    return any(d and os.path.isdir(d) and os.listdir(d) for d in dirs)
+
+
+def nuclei_scan(guard: ScopeGuard, base_url: str, timeout_s: int = 300) -> list[dict]:
+    """Run nuclei's template engine against one in-scope URL and return parsed
+    findings. Non-destructive templates only (dos/intrusive/fuzz excluded). The
+    URL is scope-checked before nuclei is pointed at it. Returns [] when nuclei
+    is unavailable, its templates are not installed, the target is out of scope,
+    or nothing matched.
+    """
+    if not has_nuclei() or not _nuclei_templates_present() or not guard.check_url(base_url).allowed:
+        return []
+    rate = max(guard.config.limits.rate_limit_pps, 10)
+    cmd = ["nuclei", "-u", base_url, "-jsonl", "-silent", "-nc",
+           "-timeout", "8", "-retries", "1", "-rate-limit", str(rate),
+           "-exclude-tags", "dos,intrusive,fuzz", "-disable-update-check"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    results, seen = [], set()
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            j = json.loads(line)
+        except ValueError:
+            continue
+        info = j.get("info") or {}
+        tid = j.get("template-id") or j.get("templateID") or "nuclei"
+        matched = j.get("matched-at") or j.get("matched_at") or j.get("host") or base_url
+        key = (tid, matched)
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append({
+            "template": tid,
+            "name": (info.get("name") or tid).strip(),
+            "severity": (info.get("severity") or "info").lower(),
+            "matched_at": matched,
+            "description": (info.get("description") or "").strip(),
+            "reference": info.get("reference") or [],
+            "tags": info.get("tags") or [],
+        })
+    order = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+    results.sort(key=lambda r: -order.get(r["severity"], 0))
+    return results[:60]  # cap so an info-heavy run cannot flood the report

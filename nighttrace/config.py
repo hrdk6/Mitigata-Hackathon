@@ -35,6 +35,7 @@ class Scope:
     binaries: list[str] = field(default_factory=list)
     exclude: list[str] = field(default_factory=list)
     ports: list[int] = field(default_factory=list)  # optional: restrict the port scan
+    full_ports: bool = False                         # scan every TCP port (nmap -p- / 1-10000) instead of the broad default
     urls: list[str] = field(default_factory=list)    # website targets, e.g. https://app.example.com:8443/portal
     # Structured web targets parsed from `urls` (and from any URL pasted into
     # `hosts`): {host, port, scheme, path, base_url}. The orchestrator seeds a
@@ -152,6 +153,16 @@ def load_scope(path: str | Path) -> Config:
     if tier not in TIERS:
         raise ValueError(f"Unknown tier {tier!r}; choose one of {sorted(TIERS)}.")
 
+    # Ports: an explicit list restricts the scan; `ports: all` (or `full_ports: true`)
+    # means scan every TCP port. The default (empty) is the broad COMMON_PORTS sweep,
+    # which is fast and already covers non-standard app ports like :1111.
+    raw_ports = scope_d.get("ports", [])
+    full_ports = bool(scope_d.get("full_ports", False))
+    if isinstance(raw_ports, str) and raw_ports.strip().lower() == "all":
+        full_ports, port_list = True, []
+    else:
+        port_list = [int(p) for p in (raw_ports or [])]
+
     # Website URLs may be given in their own `urls:` list, or pasted straight
     # into `hosts:` — either way they become structured web seeds, and their
     # host joins the allow-list. Plain IPs/hostnames in `hosts:` pass through.
@@ -181,7 +192,8 @@ def load_scope(path: str | Path) -> Config:
             hosts=plain_hosts,
             binaries=list(scope_d.get("binaries", []) or []),
             exclude=list(scope_d.get("exclude", []) or []),
-            ports=[int(p) for p in (scope_d.get("ports", []) or [])],
+            ports=port_list,
+            full_ports=full_ports,
             urls=[u for u in url_inputs if u.strip()],
             web_seeds=web_seeds,
         ),

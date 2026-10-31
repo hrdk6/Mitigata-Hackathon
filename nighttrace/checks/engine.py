@@ -7,10 +7,11 @@ non-destructive handler. Adding a new check means editing YAML, not code (B-4).
 """
 from __future__ import annotations
 
+import base64
 import re
 import secrets
 from dataclasses import dataclass, field
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from nighttrace import netservices, tools, vulndb
 from nighttrace.safety.scope_guard import ScopeGuard
@@ -162,6 +163,44 @@ _DIAG_PATHS = ("/", "/instructions.php", "/phpinfo.php", "/info.php", "/test.php
 def _sensitive_paths(body: str) -> list[str]:
     hits = [p for p in _PATH_RE.findall(body) if any(k in p.lower() for k in _PATH_MARKERS)]
     return list(dict.fromkeys(hits))  # dedupe, keep order
+
+
+def _cached_get(guard: ScopeGuard, target: dict, url: str):
+    """Reuse a page the crawl already fetched (target['page_cache']) instead of
+    re-downloading it — the biggest web-audit speed-up against a slow target."""
+    cache = target.get("page_cache") or {}
+    if url in cache:
+        return cache[url]
+    return tools.http_request(guard, url)
+
+
+# -- passive content/header audit (broad, high-recall, cheap signals) --------
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_PEM_RE = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----")
+_COMMENT_RE = re.compile(r"<!--(.*?)-->", re.S)
+_COMMENT_KEYWORDS = ("todo", "fixme", "password", "passwd", "secret", "apikey",
+                     "api_key", "api key", "token", "debug", "backdoor", "username",
+                     "internal", "do not", "temporary", "test account", "credential")
+_SENSITIVE_URL_PARAMS = ("password", "passwd", "pwd", "pass", "token", "api_key",
+                         "apikey", "access_token", "auth", "session", "sessionid",
+                         "sid", "jsessionid", "phpsessid", "secret", "key")
+_SWAGGER_PATHS = ("/swagger.json", "/openapi.json", "/api-docs", "/v2/api-docs",
+                  "/v3/api-docs", "/swagger-ui.html", "/swagger/v1/swagger.json")
+_XDOMAIN_PATHS = ("/crossdomain.xml", "/clientaccesspolicy.xml")
+_SECTXT_PATHS = ("/.well-known/security.txt", "/security.txt")
+_ASSET_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".css", ".js", ".ico", ".woff")
+
+
+# A focused, non-destructive default-credential list for HTTP Basic auth.
+_BASIC_CREDS = [
+    ("admin", "admin"), ("admin", "password"), ("admin", "admin123"),
+    ("admin", "changeme"), ("admin", "letmein"), ("admin", "secret"),
+    ("admin", "root"), ("admin", "12345"), ("admin", "123456"), ("admin", "test"),
+    ("administrator", "administrator"), ("administrator", "password"),
+    ("root", "root"), ("root", "toor"), ("root", "admin"), ("root", "password"),
+    ("user", "user"), ("guest", "guest"), ("test", "test"), ("tomcat", "tomcat"),
+    ("manager", "manager"), ("operator", "operator"), ("monitor", "monitor"),
+]
 
 
 def _looks_like_baseline(resp: dict, baseline: dict | None) -> bool:
@@ -560,7 +599,7 @@ class CheckEngine:
         err_url = err_snip = path_url = None
         path_samples: list[str] = []
         for url in urls[:25]:
-            resp = tools.http_request(guard, url)
+            resp = _cached_get(guard, target, url)
             if not resp:
                 continue
             body = resp.get("body", "") or ""
@@ -613,6 +652,237 @@ class CheckEngine:
         if _PHP_ERR.search(body) or any(s in low for s in _ERROR_SIGS):
             return VerifyOutcome(True, [f"Re-fetched {url}: verbose error/debug output still present"])
         return VerifyOutcome(False, ["Error output not present on re-check"])
+
+    def _probe_http_basic_auth(self, check, target, guard) -> list[ProbeOutcome]:
+        """An endpoint behind HTTP Basic auth: flag cleartext credential transport
+        and try a short list of default credentials (non-destructive)."""
+        base = target["base_url"]
+        resp = tools.http_request(guard, base + "/")
+        if not resp or resp.get("status") != 401:
+            return []
+        www = (resp.get("headers") or {}).get("www-authenticate", "")
+        if "basic" not in www.lower():
+            return []
+        realm_m = re.search(r'realm="?([^"]+)"?', www, re.I)
+        realm = realm_m.group(1).strip() if realm_m else ""
+        out: list[ProbeOutcome] = []
+        if base.startswith("http://"):
+            out.append(ProbeOutcome(
+                type="cleartext_basic_auth", title="HTTP Basic authentication over cleartext", severity="medium",
+                description="The endpoint requires HTTP Basic authentication"
+                            + (f" (realm '{realm}')" if realm else "")
+                            + " over an unencrypted http:// channel, so the base64-encoded username and "
+                              "password are exposed to anyone who can observe the traffic.",
+                fix="Serve the application over HTTPS/TLS (and set HSTS); never carry Basic credentials in cleartext.",
+                evidence=f"GET / -> 401; WWW-Authenticate: {www}",
+                data={"base_url": base, "realm": realm}))
+        cracked = None
+        for u, p in _BASIC_CREDS:
+            tok = base64.b64encode(f"{u}:{p}".encode()).decode()
+            r = tools.http_request(guard, base + "/", headers={"Authorization": "Basic " + tok})
+            if r and 200 <= (r.get("status") or 0) < 400:
+                cracked = (u, p, r["status"])
+                break
+        if cracked:
+            u, p, st = cracked
+            out.append(ProbeOutcome(
+                type="default_credentials", title="Default/guessable HTTP Basic credentials", severity="high",
+                description=f"The Basic auth realm{f' ({realm})' if realm else ''} accepts the weak "
+                            f"account {u}:{p}, granting access to the protected application.",
+                fix="Set strong, unique credentials; add rate limiting and lockout on the auth endpoint.",
+                evidence=f"Authorization: Basic {u}:{p} -> HTTP {st} (access granted)",
+                data={"base_url": base, "username": u, "password": p}))
+        return out
+
+    def _verify_http_basic_auth(self, check, finding, target, guard) -> VerifyOutcome:
+        d = finding.get("data") or {}
+        base = (target or {}).get("base_url") or d.get("base_url")
+        if d.get("username"):  # default-credential finding
+            tok = base64.b64encode(f"{d['username']}:{d['password']}".encode()).decode()
+            r = tools.http_request(guard, base + "/", headers={"Authorization": "Basic " + tok})
+            if r and 200 <= (r.get("status") or 0) < 400:
+                return VerifyOutcome(True, [f"Re-authenticated as {d['username']}:{d['password']} "
+                                            f"-> HTTP {r['status']}"])
+            return VerifyOutcome(False, ["Credentials no longer grant access on re-check"])
+        resp = tools.http_request(guard, base + "/")  # cleartext-transport finding
+        www = (resp.get("headers") or {}).get("www-authenticate", "") if resp else ""
+        if resp and resp.get("status") == 401 and "basic" in www.lower() and base.startswith("http://"):
+            return VerifyOutcome(True, [f"Re-checked GET /: still 401 Basic auth over cleartext ({www})"])
+        return VerifyOutcome(False, ["Cleartext Basic auth not reproduced on re-check"])
+
+    def _probe_http_passive(self, check, target, guard) -> list[ProbeOutcome]:
+        """One broad, cheap pass over the site (root + a few well-known paths +
+        already-crawled pages) that emits the many low/medium signals a real web
+        scanner reports. Optimised for recall: when in doubt, it flags."""
+        base = target["base_url"]
+        is_https = base.startswith("https")
+        endpoints = list(dict.fromkeys((target.get("endpoints") or []) + [base + "/"]))
+        out: list[ProbeOutcome] = []
+
+        # security.txt (RFC 9116) — report when absent.
+        if not any((r := tools.http_request(guard, base + p)) and r.get("status") == 200
+                   and "contact" in (r.get("body", "") or "").lower() for p in _SECTXT_PATHS):
+            out.append(ProbeOutcome(
+                type="missing_security_txt", title="Missing security.txt", severity="info",
+                description="No /.well-known/security.txt is published, so researchers have no standard "
+                            "channel to report vulnerabilities.",
+                fix="Publish a security.txt per RFC 9116 with at least a Contact field.",
+                evidence="GET /.well-known/security.txt and /security.txt returned no policy",
+                data={"base_url": base, "kind": "missing_security_txt"}))
+
+        # Cross-domain policy files (Flash/Silverlight) — exposed / permissive.
+        for p in _XDOMAIN_PATHS:
+            r = tools.http_request(guard, base + p)
+            if r and r.get("status") == 200 and "<" in (r.get("body", "") or ""):
+                compact = re.sub(r"\s+", "", r["body"])
+                permissive = 'domain="*"' in compact or 'uri="*"' in compact
+                out.append(ProbeOutcome(
+                    type="cross_domain_policy",
+                    title=f"{'Permissive' if permissive else 'Exposed'} cross-domain policy {p}",
+                    severity="medium" if permissive else "low",
+                    description=f"{p} is served"
+                                + (" and allows access from any domain (*), enabling cross-domain data theft."
+                                   if permissive else " and may widen the cross-origin attack surface."),
+                    fix="Remove the policy file or restrict it to explicitly trusted domains.",
+                    evidence=f"GET {p} -> 200" + (' with domain="*"' if permissive else ""),
+                    data={"base_url": base, "path": p, "kind": "cross_domain_policy"}))
+
+        # OpenAPI / Swagger schema exposed unauthenticated.
+        for p in _SWAGGER_PATHS:
+            r = tools.http_request(guard, base + p)
+            if r and r.get("status") == 200:
+                b = (r.get("body", "") or "")[:600].lower()
+                if "swagger" in b or "openapi" in b or '"paths"' in b:
+                    out.append(ProbeOutcome(
+                        type="exposed_api_docs", title=f"Exposed API schema {p}", severity="low",
+                        description=f"{p} exposes the API definition and endpoint list without authentication.",
+                        fix="Restrict API documentation/schema to authenticated users or internal networks.",
+                        evidence=f"GET {p} -> 200 (OpenAPI/Swagger schema)",
+                        data={"base_url": base, "path": p, "kind": "exposed_api_docs"}))
+                    break
+
+        # Body-level signals over root + a bounded sample of crawled pages.
+        flags = {"pem": False, "email": False, "comment": False, "mixed": False, "form": False}
+        for url in endpoints[:12]:
+            r = _cached_get(guard, target, url)
+            if not r:
+                continue
+            body = r.get("body", "") or ""
+            low = body.lower()
+            if not flags["pem"] and _PEM_RE.search(body):
+                flags["pem"] = True
+                out.append(ProbeOutcome(
+                    type="private_key_exposed", title="Private key material exposed", severity="high",
+                    description="A PEM-encoded private key is present in an HTTP response.",
+                    fix="Remove private keys from web-served content and rotate the exposed key immediately.",
+                    evidence=f"{url} contains a PEM private-key block",
+                    data={"base_url": base, "url": url, "kind": "pem"}))
+            if not flags["email"]:
+                emails = [e for e in dict.fromkeys(_EMAIL_RE.findall(body))
+                          if not e.lower().endswith(_ASSET_EXT)]
+                if emails:
+                    flags["email"] = True
+                    out.append(ProbeOutcome(
+                        type="email_disclosure", title="Email address disclosure", severity="info",
+                        description="Email addresses are exposed in page content and can be harvested for phishing.",
+                        fix="Obfuscate or remove email addresses from public pages.",
+                        evidence=f"{url} exposes: " + ", ".join(emails[:5]),
+                        data={"base_url": base, "url": url, "kind": "email", "samples": emails[:5]}))
+            if not flags["comment"]:
+                for c in _COMMENT_RE.findall(body):
+                    cl = c.lower()
+                    if len(c.strip()) > 3 and any(k in cl for k in _COMMENT_KEYWORDS):
+                        flags["comment"] = True
+                        out.append(ProbeOutcome(
+                            type="sensitive_comment", title="Sensitive information in HTML comment", severity="low",
+                            description="An HTML comment contains developer notes that may leak sensitive detail.",
+                            fix="Strip HTML comments from production responses.",
+                            evidence=f"{url}: <!-- {c.strip()[:100]} -->",
+                            data={"base_url": base, "url": url, "kind": "comment"}))
+                        break
+            if is_https and not flags["mixed"]:
+                m = re.search(r'(?:src|href)=["\'](http://[^"\']+)', body, re.I)
+                if m:
+                    flags["mixed"] = True
+                    out.append(ProbeOutcome(
+                        type="mixed_content", title="Mixed content (HTTP resource on an HTTPS page)", severity="low",
+                        description="An HTTPS page loads a sub-resource over plain HTTP, weakening transport security.",
+                        fix="Serve every sub-resource over HTTPS.",
+                        evidence=f"{url} references {m.group(1)[:80]}",
+                        data={"base_url": base, "url": url, "kind": "mixed"}))
+            if not flags["form"] and ("type=\"password\"" in low or "type='password'" in low or "type=password" in low):
+                insecure = not is_https or bool(re.search(r'<form[^>]*action=["\']?http://', body, re.I))
+                if insecure:
+                    flags["form"] = True
+                    out.append(ProbeOutcome(
+                        type="insecure_password_form", title="Password submitted over cleartext HTTP", severity="medium",
+                        description="A password field is served (or submits) over unencrypted HTTP, exposing credentials in transit.",
+                        fix="Serve all pages with password fields over HTTPS and submit to https:// endpoints.",
+                        evidence=f"{url}: password input on a cleartext-HTTP form",
+                        data={"base_url": base, "url": url, "kind": "password_form"}))
+
+        # Secrets/session tokens carried in URL query strings (from the crawl).
+        for u in endpoints:
+            q = urlparse(u).query.lower()
+            hit = next((k for k in _SENSITIVE_URL_PARAMS if re.search(rf'(^|&){re.escape(k)}=', q)), None)
+            if hit:
+                out.append(ProbeOutcome(
+                    type="sensitive_data_in_url", title=f"Sensitive value in URL parameter ({hit})", severity="medium",
+                    description=f"A '{hit}' value is passed in the URL query string, where it is retained in "
+                                f"server logs, proxies and browser history.",
+                    fix="Pass secrets in the request body or headers, never in the URL.",
+                    evidence=f"URL with ?{hit}=… observed: {u[:90]}",
+                    data={"base_url": base, "url": u, "kind": "url_secret", "param": hit}))
+                break
+
+        # Cookie scoped to a broad parent domain (leading-dot Domain attribute).
+        root = tools.http_request(guard, base + "/")
+        sc = (root.get("headers", {}) or {}).get("set-cookie", "") if root else ""
+        dm = re.search(r"domain=\s*(\.[^;,\s]+)", sc, re.I)
+        if dm:
+            out.append(ProbeOutcome(
+                type="loose_cookie_domain", title="Cookie scoped to a broad domain", severity="low",
+                description=f"A cookie is scoped to '{dm.group(1)}', sharing it across all subdomains — wider than needed.",
+                fix="Scope cookies to the exact host; avoid a leading-dot parent Domain unless required.",
+                evidence=f"Set-Cookie Domain={dm.group(1)}",
+                data={"base_url": base, "kind": "cookie_domain"}))
+        return out
+
+    def _verify_http_passive(self, check, finding, target, guard) -> VerifyOutcome:
+        d = finding.get("data") or {}
+        base = (target or {}).get("base_url") or d.get("base_url")
+        kind = d.get("kind")
+        if kind == "missing_security_txt":
+            still = not any((r := tools.http_request(guard, base + p)) and r.get("status") == 200
+                            and "contact" in (r.get("body", "") or "").lower() for p in _SECTXT_PATHS)
+            return VerifyOutcome(still, ["security.txt still absent" if still else "security.txt now present"])
+        if kind in ("cross_domain_policy", "exposed_api_docs"):
+            r = tools.http_request(guard, base + d.get("path", "/"))
+            ok = bool(r and r.get("status") == 200)
+            return VerifyOutcome(ok, [f"Re-checked {d.get('path')}: {'still exposed' if ok else 'gone'}"])
+        if kind == "cookie_domain":
+            r = tools.http_request(guard, base + "/")
+            ok = "domain=" in ((r.get("headers", {}) or {}).get("set-cookie", "").lower() if r else "")
+            return VerifyOutcome(ok, ["Cookie Domain attribute re-observed" if ok else "not reproduced"])
+        url = d.get("url") or (base + "/")
+        r = tools.http_request(guard, url)
+        body = (r.get("body", "") if r else "") or ""
+        low = body.lower()
+        if kind == "pem":
+            ok = bool(_PEM_RE.search(body))
+        elif kind == "email":
+            ok = any(s in body for s in d.get("samples", [])) or bool(_EMAIL_RE.search(body))
+        elif kind == "comment":
+            ok = any(any(k in c.lower() for k in _COMMENT_KEYWORDS) for c in _COMMENT_RE.findall(body))
+        elif kind == "mixed":
+            ok = bool(re.search(r'(?:src|href)=["\']http://', body, re.I))
+        elif kind == "password_form":
+            ok = "password" in low
+        elif kind == "url_secret":
+            ok = bool(re.search(rf'(^|&){re.escape(d.get("param", ""))}=', urlparse(url).query.lower()))
+        else:
+            ok = True
+        return VerifyOutcome(bool(ok), [f"Re-checked {kind}: {'confirmed' if ok else 'not reproduced'}"])
 
     # -- binary probes -------------------------------------------------------
     def _probe_binary_strings(self, check, target, guard) -> list[ProbeOutcome]:
