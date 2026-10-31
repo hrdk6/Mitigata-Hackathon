@@ -5,6 +5,7 @@ scope:
   - 192.168.60.139
   hosts:
   - 192.168.60.139
+  urls: []
   binaries: []
   exclude: []
   ports: []

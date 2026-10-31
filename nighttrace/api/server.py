@@ -61,14 +61,22 @@ def create_app(bb: Blackboard, config: Config, checks: list[dict] | None = None,
                      finished=None, error=None, scope_path=scope_path, orch=orch)
 
         def _work() -> None:
+            # A superseded run (preempted by a newer one) must not write back over
+            # the current run's live state — it only owns `state` while it is still
+            # the active orchestrator.
+            def _mine() -> bool:
+                return state.get("orch") is orch
             try:
                 orch.run()
-                state["status"] = "cancelled" if orch.cancelled else "done"
+                if _mine():
+                    state["status"] = "cancelled" if orch.cancelled else "done"
             except Exception as exc:  # a crashed run must not take the server down
-                state["status"] = "error"
-                state["error"] = f"{exc.__class__.__name__}: {exc}"
+                if _mine():
+                    state["status"] = "error"
+                    state["error"] = f"{exc.__class__.__name__}: {exc}"
             finally:
-                state["finished"] = now_iso()
+                if _mine():
+                    state["finished"] = now_iso()
 
         t = threading.Thread(target=_work, daemon=True)
         state["thread"] = t
@@ -179,9 +187,13 @@ def create_app(bb: Blackboard, config: Config, checks: list[dict] | None = None,
             preempted = False
             if _running():  # a run is in flight — preempt it so Re-scan is never blocked
                 preempted = True
-                if not _stop_current():
-                    return JSONResponse({"error": "previous run is still stopping — try again in a moment"},
-                                        status_code=409)
+                # Ask it to stop and give it a short grace period to wind down
+                # cleanly. A scan of a *remote* host can have slow network tasks
+                # still in flight that outlast the grace window — so we never block
+                # the user on it: each run is fully isolated (its own blackboard,
+                # orchestrator and scope guard), so the new run starts regardless
+                # and the old, cancelled one finishes on its own in the background.
+                _stop_current(timeout=8.0)
             _launch(cfg, _load_checks(), Blackboard(), scope_path=str(_SCOPE_FILE))
             return {"status": "running", "preempted": preempted,
                     "engagement": cfg.engagement, "tier": cfg.tier,
