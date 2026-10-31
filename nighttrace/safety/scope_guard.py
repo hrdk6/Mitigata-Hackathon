@@ -56,8 +56,13 @@ class ScopeGuard:
         self.stray_probe_attempts = 0  # scored metric: must stay at zero
 
         self._networks = [ipaddress.ip_network(n, strict=False) for n in config.scope.networks]
-        self._hosts = set(config.scope.hosts)
-        self._host_ips = {self._maybe_ip(h) for h in config.scope.hosts if self._maybe_ip(h)}
+        # Website URL targets are in scope too: their host is trusted even though
+        # it is not listed under `hosts` (so it gets a focused web audit, not a
+        # full-port host sweep).
+        seed_hosts = [s.get("host") for s in getattr(config.scope, "web_seeds", []) if s.get("host")]
+        all_hosts = list(config.scope.hosts) + seed_hosts
+        self._hosts = set(all_hosts)
+        self._host_ips = {self._maybe_ip(h) for h in all_hosts if self._maybe_ip(h)}
 
         self._excl_networks = []
         self._excl_hosts = set()

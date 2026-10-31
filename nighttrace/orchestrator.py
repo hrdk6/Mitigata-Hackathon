@@ -86,16 +86,22 @@ class Orchestrator:
     def _seed(self) -> None:
         surfaces = self.config.tier_settings["surfaces"]
         if "web" in surfaces:
-            # Website URL targets: seed the web audit directly with the exact
-            # scheme, port and base path the user gave, so a site on a custom
-            # port — or at a sub-path — is scanned even if the connect scan
-            # never reaches that port. Recon still runs on the host below.
+            # Website URL targets: a focused web audit of the exact scheme/port/
+            # path the user gave (scanned even on a non-standard port), plus —
+            # unless the host is also listed for a full scan — a recon pass scoped
+            # to just that web port (service/version/TLS/CVE). A website scan stays
+            # on-target instead of sweeping every default port on a shared host.
             for seed in self.config.scope.web_seeds:
                 self.bb.enqueue_task(
                     type="web", ptes=Ptes.VULN_ANALYSIS.value,
                     target={"host": seed["host"], "port": seed["port"],
                             "scheme": seed["scheme"], "base_url": seed["base_url"]},
                     dedupe_key=f"web:{seed['host']}:{seed['port']}")
+                if "network" in surfaces and seed["host"] not in self.config.scope.hosts:
+                    self.bb.enqueue_task(
+                        type="recon", ptes=Ptes.INTEL_GATHERING.value,
+                        target={"host": seed["host"], "ports": [seed["port"]]},
+                        dedupe_key=f"recon:url:{seed['host']}:{seed['port']}")
         if "network" in surfaces or "web" in surfaces:
             for host in self.config.scope.hosts:
                 self.bb.enqueue_task(type="recon", ptes=Ptes.INTEL_GATHERING.value,

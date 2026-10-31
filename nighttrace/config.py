@@ -103,14 +103,15 @@ def parse_web_target(url: str) -> dict:
 
 
 def apply_urls(cfg: Config, urls: list[str]) -> Config:
-    """Fold website URLs into a Config in place: register a web seed for each and
-    add its host to the scope allow-list so the Scope Guard permits it."""
+    """Fold website URLs into a Config in place: register a web seed for each.
+    The Scope Guard trusts web-seed hosts, so the target is reachable without the
+    host being added to `hosts` (which would trigger a full-port recon sweep)."""
     for u in urls:
         if not str(u).strip():
             continue
         seed = parse_web_target(u)
-        if seed["host"] not in cfg.scope.hosts:
-            cfg.scope.hosts.append(seed["host"])
+        # The host is reached via the web seed (and allowed by the Scope Guard),
+        # not added to `hosts` — so a URL target stays a focused web audit.
         if not any(s["base_url"] == seed["base_url"] for s in cfg.scope.web_seeds):
             cfg.scope.web_seeds.append(seed)
         if str(u) not in cfg.scope.urls:
@@ -167,8 +168,10 @@ def load_scope(path: str | Path) -> Config:
         seed = parse_web_target(u)  # ValueError here surfaces as a scope error
         if not any(s["base_url"] == seed["base_url"] for s in web_seeds):
             web_seeds.append(seed)
-        if seed["host"] not in plain_hosts:
-            plain_hosts.append(seed["host"])
+        # NOTE: a URL host is NOT added to `hosts`. A website target gets a
+        # focused web audit plus a recon pass scoped to its own port — not a full
+        # sweep of every default port on the (often shared) host. The Scope Guard
+        # still allows the host, because it also trusts web-seed hosts.
 
     cfg = Config(
         engagement=str(data.get("engagement", "engagement")),
@@ -192,7 +195,7 @@ def load_scope(path: str | Path) -> Config:
         flag_pattern=str(flags_d.get("pattern", r"FLAG\{.*?\}")),
         raw=data,
     )
-    if not (cfg.scope.networks or cfg.scope.hosts or cfg.scope.binaries):
+    if not (cfg.scope.networks or cfg.scope.hosts or cfg.scope.binaries or cfg.scope.web_seeds):
         raise ValueError("Scope is empty — nothing is in scope, so nothing can be tested.")
     # Hard safety rail: destructive mode is not supported by this engine.
     if cfg.limits.destructive:

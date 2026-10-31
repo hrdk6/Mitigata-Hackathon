@@ -73,7 +73,8 @@ class WebAgent(Agent):
             res.hypotheses.extend(h.as_dict() for h in
                                   hypothesis.generate_hypotheses("params_found", base))
 
-        target = {"host": host, "port": port, "base_url": base, "params": params}
+        target = {"host": host, "port": port, "base_url": base,
+                  "params": params, "endpoints": pages}
         for check in self.engine.applicable("web", {"service": "http"}):
             for o in self.engine.probe(check, target, self.guard):
                 res.findings.append(FindingRec(

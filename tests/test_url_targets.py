@@ -11,6 +11,7 @@ import pytest
 from nighttrace.config import (apply_urls, config_from_urls, load_scope,
                                load_checks, parse_web_target, Config)
 from nighttrace.orchestrator import Orchestrator
+from nighttrace.safety import ScopeGuard
 from targets import demo_lab
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,17 +38,21 @@ def test_parse_web_target_forms():
             parse_web_target(bad)
 
 
-def test_config_from_urls_registers_host_and_seed():
+def test_config_from_urls_registers_seed_and_is_in_scope():
     cfg = config_from_urls(["https://app.example.com:8443/portal"])
-    assert "app.example.com" in cfg.scope.hosts  # host joins the allow-list
+    # A URL target is a focused web audit: its host is NOT added to `hosts`
+    # (which would trigger a full-port host sweep), only a web seed.
+    assert "app.example.com" not in cfg.scope.hosts
     seed = cfg.scope.web_seeds[0]
     assert seed["port"] == 8443 and seed["scheme"] == "https"
     assert seed["base_url"] == "https://app.example.com:8443/portal"
+    # …but the Scope Guard still allows the host (it trusts web-seed hosts).
+    assert ScopeGuard(cfg).check_network("app.example.com", 8443).allowed
 
 
 def test_apply_urls_is_idempotent():
     cfg = apply_urls(Config(), ["http://example.com", "http://example.com"])
-    assert cfg.scope.hosts.count("example.com") == 1
+    assert "example.com" not in cfg.scope.hosts  # web seed, not a full-scan host
     assert len(cfg.scope.web_seeds) == 1
 
 
@@ -65,9 +70,13 @@ def test_load_scope_accepts_urls(tmp_path):
         encoding="utf-8",
     )
     cfg = load_scope(p)
-    assert {"example.com", "10.0.0.9", "10.0.0.10"} <= set(cfg.scope.hosts)
+    # Only the plain host is a full-scan host; the URLs become focused web seeds.
+    assert cfg.scope.hosts == ["10.0.0.10"]
     bases = {s["base_url"] for s in cfg.scope.web_seeds}
     assert {"https://example.com:8443/app", "http://10.0.0.9:8080"} == bases
+    g = ScopeGuard(cfg)
+    assert g.check_network("example.com", 8443).allowed
+    assert g.check_network("10.0.0.9", 8080).allowed
 
 
 def test_full_run_from_website_url_finds_and_proves(tmp_path):

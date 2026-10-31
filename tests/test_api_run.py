@@ -44,7 +44,7 @@ def test_run_preempt_never_returns_409(tmp_path, monkeypatch):
         assert r2.status_code == 200, r2.text          # the 409 path is gone
         assert r2.json()["status"] == "running"
         assert r2.json()["preempted"] is True          # it really did preempt run #1
-        assert "127.0.0.1" in r2.json()["targets"]["hosts"]
+        assert any("127.0.0.1" in u for u in r2.json()["targets"]["urls"])
 
         # The superseded run must not clobber the active run's final state.
         for _ in range(150):

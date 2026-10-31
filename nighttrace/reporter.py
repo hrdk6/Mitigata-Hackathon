@@ -122,9 +122,11 @@ def render_markdown(report: dict) -> str:
     out: list[str] = []
     out.append(f"# NightTrace report — {report['engagement']}")
     out.append("")
+    dur = report.get("duration_seconds")
+    dur_txt = f"{dur}s" if dur is not None else "in progress"
     out.append(f"**Tier:** {report['tier']} (score x{report['score_multiplier']}) · "
-               f"**Duration:** {report.get('duration_seconds')}s · "
-               f"**Finished:** {report.get('finished')}")
+               f"**Duration:** {dur_txt} · "
+               f"**Finished:** {report.get('finished') or '—'}")
     out.append("")
     if report.get("narrative"):
         out.append("## Executive summary")
@@ -241,6 +243,8 @@ def render_json(report: dict) -> str:
 
 def render_html(report: dict) -> str:
     s = report["scope_safety"] or {}
+    dur = report.get("duration_seconds")
+    dur_txt = f"{dur}s" if dur is not None else "in progress"
     rows = []
     for i, f in enumerate(report["confirmed_findings"], 1):
         ev = "".join(f"<li><em>{html.escape(str(e.get('kind')))}</em>: "
@@ -283,7 +287,7 @@ def render_html(report: dict) -> str:
  table{{border-collapse:collapse;width:100%;margin:.5rem 0}} th,td{{border:1px solid #ddd;padding:.4rem .6rem;text-align:left;font-size:.9em}} th{{background:#f4f4f4}}
 </style></head><body>
 <h1>NightTrace report</h1>
-<p><strong>{html.escape(report['engagement'])}</strong> · tier {html.escape(report['tier'])} · {report.get('duration_seconds')}s</p>
+<p><strong>{html.escape(report['engagement'])}</strong> · tier {html.escape(report['tier'])} · {html.escape(dur_txt)}</p>
 <p class="ok">Stray out-of-scope probes: {s.get('stray_probe_attempts', 0)} &nbsp;|&nbsp; Confirmed findings: {report['stats']['confirmed']} &nbsp;|&nbsp; Refuted false alarms: {report['stats']['refuted']}</p>
 <h2>Threat modeling — hypotheses</h2>
 <p class="meta">{sum(1 for h in hyp['formulated'] if h.get('validated'))} of {len(hyp['formulated'])} formulated hypotheses validated with captured evidence.</p>

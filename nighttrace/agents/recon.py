@@ -59,7 +59,9 @@ class ReconAgent(Agent):
             else:
                 hosts = candidates
 
-        ports = self.config.scope.ports or None
+        # A URL-scoped recon task carries its own port list (just the web port);
+        # otherwise fall back to the engagement's configured ports, then defaults.
+        ports = target.get("ports") or self.config.scope.ports or None
         via = "nmap" if tools.has_nmap() else "connect-scan"
         arp = netdiscover.arp_table()  # best-effort MAC map for OS fingerprinting
         for host in hosts:
@@ -70,8 +72,20 @@ class ReconAgent(Agent):
                 self.emit("port_scan", Ptes.INTEL_GATHERING.value,
                           f"{host}: {len(open_ports)} open port(s) via {via}: {listing}")
             else:
-                self.emit("port_scan", Ptes.INTEL_GATHERING.value,
-                          f"{host}: no open ports found in scope")
+                # No open ports is ambiguous — say *why* so a blank report is not a
+                # mystery: a host that answers ICMP but exposes no TCP port is almost
+                # always a live box whose target service is stopped or firewalled.
+                ttl = tools.ping_ttl(self.guard, host)
+                if ttl is not None:
+                    self.emit("port_scan", Ptes.INTEL_GATHERING.value,
+                              f"{host}: host is UP (ICMP reply, TTL {ttl}) but no open TCP ports in scope "
+                              f"— the target service is likely stopped or firewalled, so there is nothing to scan",
+                              level="warn")
+                else:
+                    self.emit("port_scan", Ptes.INTEL_GATHERING.value,
+                              f"{host}: no open ports and no ICMP reply — host appears down or unreachable "
+                              f"from where NightTrace runs",
+                              level="warn")
 
             # Resolve the service per port first, so we can read an HTTP Server
             # header (one signal into OS fingerprinting) and reuse the result.

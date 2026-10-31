@@ -129,6 +129,40 @@ _BACKUP_PATHS = [
 _FILE_SIGS = ("-----begin", "<?php", "[core]", "sqlite format 3",
               "db_password", "aws_secret", "private key", "password=")
 
+# -- information-disclosure detection (error pages, stack traces, server paths) --
+_TECH_HEADERS = {  # header key (lowercase) -> canonical label
+    "server": "Server", "x-powered-by": "X-Powered-By",
+    "x-aspnet-version": "X-AspNet-Version", "x-aspnetmvc-version": "X-AspNetMvc-Version",
+    "x-generator": "X-Generator", "x-drupal-cache": "X-Drupal-Cache", "via": "Via",
+}
+# Verbose PHP error prefixes (optionally wrapped in <b>…</b>).
+_PHP_ERR = re.compile(r"(?:<b>)?\s*(?:Warning|Fatal error|Parse error|Notice|Deprecated)\s*(?:</b>)?\s*:", re.I)
+_ERROR_SIGS = (
+    "stack trace", "traceback (most recent call last)", "uncaught exception",
+    "sqlstate[", "pdoexception", "mysqli_", "mysql_fetch", "pg_query(",
+    "you have an error in your sql", "ora-00", "system.data.sqlclient",
+    "server error in '/' application", "exception details:", "werkzeug debugger",
+    "java.lang.", "javax.servlet", "at org.apache", "call stack:",
+    "undefined variable", "undefined index", " on line ", "xdebug",
+)
+# Absolute server filesystem paths (Unix roots or Windows web roots).
+_PATH_RE = re.compile(
+    r"(/(?:var|etc|usr|opt|srv|home|root|proc)/[A-Za-z0-9._][A-Za-z0-9._/-]{2,}"
+    r"|[A-Za-z]:\\(?:inetpub|xampp|wamp64|wamp|windows|users|program files(?: \(x86\))?|www)[\\A-Za-z0-9._ -]{2,})",
+    re.I,
+)
+# A path is "sensitive" (worth reporting) only if it names a server-ish location.
+_PATH_MARKERS = ("www", "passwd", "shadow", ".ini", ".conf", ".log", "apache",
+                 "nginx", "mysql", "/html", "php", "/etc/", "htdocs", "inetpub")
+# Pages that commonly leak diagnostics — probed in addition to crawled endpoints.
+_DIAG_PATHS = ("/", "/instructions.php", "/phpinfo.php", "/info.php", "/test.php",
+               "/debug", "/trace", "/status", "/server-info")
+
+
+def _sensitive_paths(body: str) -> list[str]:
+    hits = [p for p in _PATH_RE.findall(body) if any(k in p.lower() for k in _PATH_MARKERS)]
+    return list(dict.fromkeys(hits))  # dedupe, keep order
+
 
 def _looks_like_baseline(resp: dict, baseline: dict | None) -> bool:
     """True when `resp` is indistinguishable from the server's answer for a
@@ -485,26 +519,100 @@ class CheckEngine:
         p = check["probe"]
         base = target["base_url"]
         resp = tools.http_request(guard, base + p.get("path", "/"))
-        if resp:
-            server = resp["headers"].get("server", "")
-            if server and re.search(r"\d", server):
-                return [ProbeOutcome(
-                    type="version_disclosure",
-                    title="Server version disclosure",
-                    severity="low",
-                    description=f"The Server header reveals software and version: {server}",
-                    fix="Suppress or genericise the Server header to avoid version fingerprinting.",
-                    evidence=f"Server: {server}",
-                    data={"server": server, "path": p.get("path", "/")})]
-        return []
+        if not resp:
+            return []
+        h = resp.get("headers", {})
+        tech = {label: h[key] for key, label in _TECH_HEADERS.items() if h.get(key)}
+        # Interesting when a value carries a version, or is a software-revealing
+        # header like X-Powered-By (PHP/…) — not a bare "Server: nginx".
+        revealing = {k: v for k, v in tech.items() if v and (re.search(r"\d", v) or k != "Server")}
+        if not revealing:
+            return []
+        detail = "; ".join(f"{k}: {v}" for k, v in revealing.items())
+        return [ProbeOutcome(
+            type="version_disclosure",
+            title="Server software and technology disclosed",
+            severity="low",
+            description=f"Response headers reveal server software and versions ({detail}), "
+                        f"which lets an attacker target version-specific exploits.",
+            fix="Suppress or genericise Server, X-Powered-By and similar fingerprinting headers.",
+            evidence=detail,
+            data={"headers": revealing, "path": p.get("path", "/")})]
 
     def _verify_http_header_present(self, check, finding, target, guard) -> VerifyOutcome:
         d = finding.get("data") or {}
         base = target["base_url"]
         resp = tools.http_request(guard, base + d.get("path", "/"))
-        if resp and resp["headers"].get("server"):
-            return VerifyOutcome(True, [f"Server header re-observed: {resp['headers'].get('server')}"])
-        return VerifyOutcome(False, ["Server header not present on re-test"])
+        if not resp:
+            return VerifyOutcome(False, ["Could not re-fetch to re-check headers"])
+        h = resp.get("headers", {})
+        present = {k: h[k.lower()] for k in (d.get("headers") or {"Server": ""}) if h.get(k.lower())}
+        if present:
+            return VerifyOutcome(True, ["Re-observed: " + "; ".join(f"{k}: {v}" for k, v in present.items())])
+        return VerifyOutcome(False, ["Technology headers not present on re-test"])
+
+    def _probe_http_info_disclosure(self, check, target, guard) -> list[ProbeOutcome]:
+        """Scan crawled pages (and a few common diagnostic endpoints) for verbose
+        errors, stack traces, and absolute server file paths leaking in responses."""
+        base = target["base_url"]
+        urls = list(dict.fromkeys(
+            (target.get("endpoints") or []) + [base + p for p in _DIAG_PATHS]))
+        err_url = err_snip = path_url = None
+        path_samples: list[str] = []
+        for url in urls[:25]:
+            resp = tools.http_request(guard, url)
+            if not resp:
+                continue
+            body = resp.get("body", "") or ""
+            low = body.lower()
+            if err_url is None:
+                m = _PHP_ERR.search(body)
+                sig = next((s for s in _ERROR_SIGS if s in low), None)
+                if m or sig:
+                    at = m.start() if m else low.index(sig)
+                    err_url = url
+                    err_snip = " ".join(body[max(0, at - 12):at + 140].split())[:170]
+            if path_url is None:
+                sens = _sensitive_paths(body)
+                if sens:
+                    path_url, path_samples = url, sens[:6]
+            if err_url and path_url:
+                break
+        out: list[ProbeOutcome] = []
+        if err_url:
+            out.append(ProbeOutcome(
+                type="error_disclosure", title="Verbose error / debug output disclosed", severity="low",
+                description="A page returns a verbose error, stack trace, or debug output that leaks "
+                            "application internals (file paths, SQL, framework or language versions).",
+                fix="Disable debug mode in production; show generic errors and log details server-side.",
+                evidence=f"{err_url} -> {err_snip}",
+                data={"base_url": base, "url": err_url}))
+        if path_url:
+            out.append(ProbeOutcome(
+                type="path_disclosure", title="Server file path disclosure", severity="low",
+                description="The response discloses absolute server filesystem paths, revealing the OS "
+                            "layout and aiding further attacks such as LFI/RFI and log poisoning.",
+                fix="Suppress full filesystem paths in output and error messages.",
+                evidence=f"{path_url} exposes: " + ", ".join(path_samples),
+                data={"base_url": base, "url": path_url, "samples": path_samples}))
+        return out
+
+    def _verify_http_info_disclosure(self, check, finding, target, guard) -> VerifyOutcome:
+        d = finding.get("data") or {}
+        url = d.get("url")
+        resp = tools.http_request(guard, url) if url else None
+        if not resp:
+            return VerifyOutcome(False, ["Page not retrievable on re-check"])
+        body = resp.get("body", "") or ""
+        low = body.lower()
+        if d.get("samples"):  # path disclosure
+            still = [s for s in d["samples"] if s.lower() in low]
+            if still:
+                return VerifyOutcome(True, [f"Re-fetched {url}: still discloses {', '.join(still[:4])}"])
+            return VerifyOutcome(False, ["Server paths not present on re-check"])
+        if _PHP_ERR.search(body) or any(s in low for s in _ERROR_SIGS):
+            return VerifyOutcome(True, [f"Re-fetched {url}: verbose error/debug output still present"])
+        return VerifyOutcome(False, ["Error output not present on re-check"])
 
     # -- binary probes -------------------------------------------------------
     def _probe_binary_strings(self, check, target, guard) -> list[ProbeOutcome]:

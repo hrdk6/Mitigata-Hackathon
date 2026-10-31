@@ -103,7 +103,16 @@ checks:
     probe: {type: http_header_disclosure, path: "/"}
     verify: {type: http_header_present}
     severity: low
-    fix: "Suppress or genericise the Server header to avoid version fingerprinting."
+    fix: "Suppress or genericise the Server/X-Powered-By headers to avoid version fingerprinting."
+
+  - id: web-info-disclosure
+    surface: web
+    ptes_phase: vulnerability_analysis
+    when: {service: http}
+    probe: {type: http_info_disclosure}
+    verify: {type: http_info_disclosure}
+    severity: low
+    fix: "Disable debug/verbose errors in production; never expose absolute server file paths."
 
   - id: web-sql-injection
     surface: web
