@@ -42,7 +42,7 @@ def create_app(bb: Blackboard, config: Config, *, autostart: bool = False) -> Fa
     # run currently on screen.
     state: dict = {"bb": bb, "config": config, "status": "idle",
                    "started": None, "finished": None, "error": None,
-                   "scope_path": None, "thread": None}
+                   "scope_path": None, "thread": None, "orch": None}
     launch_lock = threading.Lock()
 
     def _running() -> bool:
@@ -55,14 +55,14 @@ def create_app(bb: Blackboard, config: Config, *, autostart: bool = False) -> Fa
         background so the dashboard streams it live."""
         from nighttrace.orchestrator import Orchestrator  # local import avoids a cycle
 
-        state.update(bb=target_bb, config=cfg, status="running", started=now_iso(),
-                     finished=None, error=None, scope_path=scope_path)
         orch = Orchestrator(cfg, checks, blackboard=target_bb)
+        state.update(bb=target_bb, config=cfg, status="running", started=now_iso(),
+                     finished=None, error=None, scope_path=scope_path, orch=orch)
 
         def _work() -> None:
             try:
                 orch.run()
-                state["status"] = "done"
+                state["status"] = "cancelled" if orch.cancelled else "done"
             except Exception as exc:  # a crashed run must not take the server down
                 state["status"] = "error"
                 state["error"] = f"{exc.__class__.__name__}: {exc}"
@@ -72,6 +72,17 @@ def create_app(bb: Blackboard, config: Config, *, autostart: bool = False) -> Fa
         t = threading.Thread(target=_work, daemon=True)
         state["thread"] = t
         t.start()
+
+    def _stop_current(timeout: float = 12.0) -> bool:
+        """Ask the in-flight run to stop and wait briefly for it to wind down.
+        Returns True once no run is active."""
+        orch = state.get("orch")
+        if orch is not None:
+            orch.cancel()
+        t = state["thread"]
+        if t is not None and t.is_alive():
+            t.join(timeout=timeout)
+        return not _running()
 
     def _load_checks() -> list[dict]:
         return load_checks(_CHECKS_FILE) if _CHECKS_FILE.is_file() else []
@@ -155,9 +166,7 @@ def create_app(bb: Blackboard, config: Config, *, autostart: bool = False) -> Fa
         what the dashboard's Run button calls, so editing the scope and pressing
         Run re-points the engine with no restart and no demo."""
         with launch_lock:
-            if _running():
-                return JSONResponse({"error": "a run is already in progress", "status": state["status"]},
-                                    status_code=409)
+            # Validate the new scope *before* stopping anything in flight.
             if not _SCOPE_FILE.is_file():
                 return JSONResponse({"error": "no scope.yaml yet — calibrate the scope first at /scope-editor"},
                                     status_code=400)
@@ -165,10 +174,26 @@ def create_app(bb: Blackboard, config: Config, *, autostart: bool = False) -> Fa
                 cfg = load_scope(_SCOPE_FILE)
             except Exception as exc:
                 return JSONResponse({"error": f"scope.yaml is not runnable: {exc}"}, status_code=400)
+            preempted = False
+            if _running():  # a run is in flight — preempt it so Re-scan is never blocked
+                preempted = True
+                if not _stop_current():
+                    return JSONResponse({"error": "previous run is still stopping — try again in a moment"},
+                                        status_code=409)
             _launch(cfg, _load_checks(), Blackboard(), scope_path=str(_SCOPE_FILE))
-            return {"status": "running", "engagement": cfg.engagement, "tier": cfg.tier,
+            return {"status": "running", "preempted": preempted,
+                    "engagement": cfg.engagement, "tier": cfg.tier,
                     "targets": {"networks": cfg.scope.networks, "hosts": cfg.scope.hosts,
                                 "binaries": cfg.scope.binaries}}
+
+    @app.post("/run/stop")
+    def run_stop() -> dict:
+        """Abort the current run without starting a new one."""
+        with launch_lock:
+            if not _running():
+                return {"status": state["status"], "running": False}
+            _stop_current()
+            return {"status": state["status"], "running": _running()}
 
     @app.get("/run/status")
     def run_status() -> dict:

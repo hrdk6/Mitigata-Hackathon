@@ -39,13 +39,23 @@ class ReconAgent(Agent):
         res = AgentResult()
         hosts: list[str] = []
         if target.get("host"):
-            hosts = [target["host"]]
+            hosts = [target["host"]]  # explicitly listed: always full-scanned
         elif target.get("network"):
             try:
                 net = ipaddress.ip_network(target["network"], strict=False)
-                hosts = [str(h) for h in list(net.hosts())[:256]]
+                candidates = [str(h) for h in list(net.hosts())[:256]]
             except ValueError:
-                hosts = []
+                candidates = []
+            # For a real range, clear dead addresses with a quick liveness sweep
+            # first, so a mostly-empty subnet does not pay a full port scan per
+            # host. A single-address range (/32) skips the gate.
+            if len(candidates) > 1:
+                hosts = tools.filter_live(self.guard, candidates)
+                self.emit("liveness", Ptes.INTEL_GATHERING.value,
+                          f"{target['network']}: {len(hosts)} live host(s) of "
+                          f"{len(candidates)} addresses — scanning the live ones")
+            else:
+                hosts = candidates
 
         ports = self.config.scope.ports or None
         via = "nmap" if tools.has_nmap() else "connect-scan"

@@ -124,6 +124,43 @@ def discover(guard: ScopeGuard, host: str, ports: list[int] | None = None,
     return tcp_scan(guard, host, ports, timeout=timeout)
 
 
+# A short port list used only to answer "is this host up?" before a full scan.
+# A connect that succeeds (open) OR is actively refused (RST) proves the host
+# exists; only a timeout leaves it unproven — so a mostly-empty range is cleared
+# cheaply instead of paying a full port scan per dead address.
+_ALIVE_PORTS = (80, 443, 22, 445, 3389)
+_HOST_UP_ERRNOS = {111, 104, 10061, 10054}  # ECONNREFUSED / ECONNRESET (POSIX + WSA)
+
+
+def host_is_live(guard: ScopeGuard, host: str, timeout: float = 0.5,
+                 ports: tuple[int, ...] = _ALIVE_PORTS) -> bool:
+    """Fast, scope-checked liveness probe: True as soon as any port is open or
+    actively refuses the connection. Returns on the first proof."""
+    for port in ports:
+        if not guard.check_network(host, port).allowed:
+            continue
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(timeout)
+                rc = s.connect_ex((host, port))
+                if rc == 0 or rc in _HOST_UP_ERRNOS:
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def filter_live(guard: ScopeGuard, hosts: list[str], timeout: float = 0.5,
+                workers: int = 64) -> list[str]:
+    """Keep only the hosts that answer a quick liveness probe, checked in
+    parallel (the Scope Guard still gates and paces every probe). Order preserved."""
+    if not hosts:
+        return []
+    with ThreadPoolExecutor(max_workers=min(workers, len(hosts))) as ex:
+        live = set(ex.map(lambda h: h if host_is_live(guard, h, timeout) else None, hosts))
+    return [h for h in hosts if h in live]
+
+
 def _banner(s: socket.socket) -> str:
     try:
         s.settimeout(0.5)

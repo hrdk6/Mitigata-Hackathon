@@ -8,6 +8,7 @@ report out, with no human in the loop.
 """
 from __future__ import annotations
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -41,6 +42,17 @@ class Orchestrator:
         # by the check they suggest, and by the target they concern.
         self._boost_by_check: dict[str, int] = {}
         self._boost_by_target: dict[str, int] = {}
+        # Cooperative cancellation: lets a new run preempt a long one in flight.
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        """Ask the control loop to stop after the current batch; run() then
+        finishes by building a report from whatever has been gathered so far."""
+        self._cancel.set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancel.is_set()
 
     # -- public --------------------------------------------------------------
     def run(self) -> dict:
@@ -56,6 +68,9 @@ class Orchestrator:
 
         self._seed()
         self._loop(deadline)
+        if self._cancel.is_set():
+            self.bb.add_event("orchestrator", "cancelled", Ptes.REPORTING.value,
+                              "run cancelled — building report from partial results", level="warn")
         attack = attack_graph.build(self.bb)
         self._score_findings(attack)
 
@@ -86,7 +101,7 @@ class Orchestrator:
     def _loop(self, deadline: float) -> None:
         pool = ThreadPoolExecutor(max_workers=self.workers)
         try:
-            while time.monotonic() < deadline:
+            while time.monotonic() < deadline and not self._cancel.is_set():
                 batch = heuristic.prioritize(self.bb.claim_pending(self.workers))
                 if not batch:
                     break

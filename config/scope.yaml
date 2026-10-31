@@ -1,9 +1,9 @@
-engagement: scope-change-verify
-tier: breach
+engagement: engagement
+tier: recon
 scope:
-  networks: []
-  hosts:
+  networks:
   - 192.168.60.139
+  hosts: []
   binaries: []
   exclude: []
   ports: []

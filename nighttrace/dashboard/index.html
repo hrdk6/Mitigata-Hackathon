@@ -55,7 +55,8 @@
   <span class="mut" id="meta">connecting…</span>
   <span class="mut" id="runState"></span>
   <div class="actions">
-    <button id="runBtn" class="btn btn-primary" onclick="startRun()" title="Scan the currently calibrated scope.yaml">Run scan</button>
+    <button id="runBtn" class="btn btn-primary" onclick="startRun()" title="Scan the currently calibrated scope.yaml (preempts a running scan)">Run scan</button>
+    <button id="stopBtn" class="btn" onclick="stopRun()" disabled title="Abort the current scan">Stop</button>
     <a href="/scope-editor" class="btn" title="Calibrate what the agents may touch (scope.yaml)">Edit scope</a>
     <a href="/discover" class="btn" title="Find hosts on the local WiFi/LAN and build a scope">Discover hosts</a>
     <a href="/report?format=html" target="_blank" class="btn" title="Open full visual HTML report in a new tab">Report</a>
@@ -168,42 +169,65 @@ function set(id,v){ document.getElementById(id).textContent = v; }
 function escapeHtml(s){ return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
 // --- run control: scan whatever is calibrated in scope.yaml, from the UI ---
+let runBusy = false;   // suppress status polling while a start/stop request is mid-flight
+
+function resetView(){
+  lastId = 0; feed.innerHTML = ''; seenPhases.clear(); phaseBar();
+  ['t-assets','t-confirmed','t-suspected','t-refuted','t-stray'].forEach(id=>set(id,0));
+  document.getElementById('findings').innerHTML = '<span class="mut">none yet</span>';
+  document.getElementById('hyps').innerHTML = '<span class="mut">none yet — formulated as signals appear</span>';
+  document.getElementById('chain').innerHTML = '<span class="mut">not assembled yet</span>';
+}
+
 async function startRun(){
   const btn = document.getElementById('runBtn');
-  btn.disabled = true; btn.textContent = 'Starting…';
+  runBusy = true;
+  btn.disabled = true; btn.textContent = 'Working…';
+  document.getElementById('stopBtn').disabled = true;
+  document.getElementById('runState').textContent = '· starting…';
   try{
     const r = await fetch('/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
     const d = await r.json();
     if(!r.ok){
       document.getElementById('runState').textContent = '· ' + (d.error || 'could not start run');
-      btn.disabled = false; btn.textContent = 'Run scan';
       return;
     }
-    // new run writes into a fresh blackboard — reset the live view to match
-    lastId = 0; feed.innerHTML = ''; seenPhases.clear(); phaseBar();
-    ['t-assets','t-confirmed','t-suspected','t-refuted','t-stray'].forEach(id=>set(id,0));
-    document.getElementById('findings').innerHTML = '<span class="mut">none yet</span>';
-    document.getElementById('hyps').innerHTML = '<span class="mut">none yet — formulated as signals appear</span>';
-    document.getElementById('chain').innerHTML = '<span class="mut">not assembled yet</span>';
+    resetView();   // new run uses a fresh blackboard — clear the old one from view
   }catch(e){
     document.getElementById('runState').textContent = '· run error: ' + e.message;
-    btn.disabled = false; btn.textContent = 'Run scan';
+  }finally{
+    runBusy = false;
   }
 }
 
+async function stopRun(){
+  const stop = document.getElementById('stopBtn');
+  runBusy = true;
+  stop.disabled = true;
+  document.getElementById('runState').textContent = '· stopping…';
+  try{ await fetch('/run/stop', {method:'POST'}); }
+  catch(e){}
+  finally{ runBusy = false; }
+}
+
 async function pollRun(){
+  if(runBusy) return;
   const s = await j('/run/status');
   if(!s) return;
   const btn = document.getElementById('runBtn');
+  const stop = document.getElementById('stopBtn');
   const rs = document.getElementById('runState');
   if(s.running){
-    btn.disabled = true; btn.textContent = 'Running…';
+    btn.disabled = false; btn.textContent = 'Re-scan';   // enabled: Re-scan preempts
+    stop.disabled = false;
     rs.textContent = '· scanning' + (s.scope_path ? ' '+s.scope_path.split(/[\\\/]/).pop() : '') + '…';
   }else{
     btn.disabled = false;
-    btn.textContent = (s.status==='done'||s.status==='error') ? 'Re-scan' : 'Run scan';
-    rs.textContent = s.status==='done'  ? '· run complete'
-                   : s.status==='error' ? '· run error: ' + (s.error||'')
+    btn.textContent = (s.status==='idle') ? 'Run scan' : 'Re-scan';
+    stop.disabled = true;
+    rs.textContent = s.status==='done'      ? '· run complete'
+                   : s.status==='cancelled' ? '· run stopped'
+                   : s.status==='error'     ? '· run error: ' + (s.error||'')
                    : '· idle — calibrate a scope and press Run';
   }
 }
