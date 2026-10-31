@@ -29,6 +29,9 @@ DEFAULT_PORTS = [
 HTTP_PORTS = {80, 591, 3000, 5000, 8000, 8008, 8080, 8081, 8888, 9000}
 HTTPS_PORTS = {443, 8443, 9443}
 
+# Ports that speak TLS directly (for certificate/protocol auditing).
+TLS_PORTS = HTTPS_PORTS | {465, 636, 989, 990, 992, 993, 995, 5061, 5986}
+
 
 class _NoRedirect(request.HTTPRedirectHandler):
     """Do not auto-follow redirects — a redirect could point out of scope.

@@ -12,7 +12,7 @@ import secrets
 from dataclasses import dataclass, field
 from urllib.parse import urlencode
 
-from nighttrace import tools
+from nighttrace import netservices, tools, vulndb
 from nighttrace.safety.scope_guard import ScopeGuard
 
 
@@ -91,6 +91,44 @@ def _traversal_hit(body: str) -> bool:
 def _dir_listing(body: str) -> bool:
     low = body.lower()
     return "index of /" in low or "directory listing for" in low
+
+
+# -- extended web-check configuration ----------------------------------------
+_SEC_HEADERS = {  # header key (lowercase) -> canonical label
+    "content-security-policy": "Content-Security-Policy",
+    "x-frame-options": "X-Frame-Options",
+    "x-content-type-options": "X-Content-Type-Options",
+    "referrer-policy": "Referrer-Policy",
+}
+_CORS_EVIL = "https://nighttrace-cors-probe.example"      # attacker origin, non-routable
+_RISKY_METHODS = {"TRACE", "TRACK", "PUT", "DELETE", "CONNECT", "PATCH"}
+_REDIRECT_PARAMS = ["next", "url", "redirect", "return", "returnurl", "dest",
+                    "destination", "continue", "redirect_uri", "r", "u"]
+_REDIRECT_EVIL = "https://nighttrace-oob.example/x"       # external target, non-routable
+_BACKUP_PATHS = [
+    "/.env", "/.env.bak", "/.env.local", "/.env.save", "/config.php.bak",
+    "/wp-config.php.bak", "/web.config.bak", "/settings.py.bak",
+    "/backup.sql", "/database.sql", "/db.sql", "/dump.sql",
+    "/backup.zip", "/backup.tar.gz", "/site.tar.gz", "/www.zip",
+    "/.htpasswd", "/.svn/entries", "/.DS_Store", "/id_rsa",
+    "/.bash_history", "/index.php~", "/config.json.bak",
+]
+_FILE_SIGS = ("-----begin", "<?php", "[core]", "sqlite format 3",
+              "db_password", "aws_secret", "private key", "password=")
+
+
+def _looks_like_baseline(resp: dict, baseline: dict | None) -> bool:
+    """True when `resp` is indistinguishable from the server's answer for a
+    random, nonexistent path — i.e. a catch-all page (an SPA that 200s every
+    route, or a WAF that 403s everything), not a real resource."""
+    if not baseline or resp.get("status") != baseline.get("status"):
+        return False
+    a, b = resp.get("body") or "", baseline.get("body") or ""
+    if a == b:
+        return True
+    ca = (resp.get("headers") or {}).get("content-type", "")
+    cb = (baseline.get("headers") or {}).get("content-type", "")
+    return ca == cb and abs(len(a) - len(b)) <= max(32, len(b) // 50)
 
 
 class CheckEngine:
@@ -365,10 +403,13 @@ class CheckEngine:
         p = check["probe"]
         base = target["base_url"]
         expect = set(p.get("expect_status", [200, 401, 403]))
+        # How does the server answer for something that doesn't exist? A "hit"
+        # that looks the same is a catch-all page, not an exposed resource.
+        baseline = tools.http_request(guard, base + "/nt-" + secrets.token_hex(6))
         out = []
         for path in p.get("paths", []):
             resp = tools.http_request(guard, base + path)
-            if resp and resp["status"] in expect:
+            if resp and resp["status"] in expect and not _looks_like_baseline(resp, baseline):
                 out.append(ProbeOutcome(
                     type="exposed_path",
                     title=f"Reachable sensitive path {path}",
@@ -502,3 +543,446 @@ class CheckEngine:
             ok = b"__stack_chk_fail" not in raw
             return VerifyOutcome(ok, ["Re-parsed binary: no stack-protector symbol" if ok else "canary symbol present"])
         return VerifyOutcome(False, ["Unknown checksec sub-check"])
+
+    # -- network probes ------------------------------------------------------
+    def _probe_net_version(self, check, target, guard) -> list[ProbeOutcome]:
+        """Identify the product/version behind an open port and correlate it with
+        the offline CVE database. Version-based, non-destructive."""
+        host, port, svc = target["host"], target["port"], target.get("service")
+        product, version = target.get("product"), target.get("version")
+        if not (product and version):
+            b = target.get("banner") or ""
+            # Actively grab the banner (longer window than the scan's) for any
+            # non-HTTP service when we don't already have a version. HTTP carries
+            # its version in the Server header, passed as http_server instead.
+            if not b and svc not in ("http", "https"):
+                b = netservices.banner(guard, host, port)
+            product, version = netservices.identify(svc, b, target.get("http_server"))
+        if not (product and version):
+            return []
+        out = []
+        for hit in vulndb.lookup(product, version):
+            out.append(ProbeOutcome(
+                type="vulnerable_version",
+                title=f"{product} {version} affected by {hit.cve}",
+                severity=hit.severity,
+                description=f"{hit.summary} Identified from the service banner on {host}:{port} "
+                            f"(version-based detection, non-destructive).",
+                fix=hit.fix,
+                evidence=f"{host}:{port} identifies as {product} {version}; {hit.cve} affects this version",
+                data={"host": host, "port": port, "service": svc, "product": product,
+                      "version": version, "cve": hit.cve}))
+        return out
+
+    def _verify_net_version(self, check, finding, target, guard) -> VerifyOutcome:
+        d = finding.get("data") or {}
+        host = (target or {}).get("host") or d.get("host")
+        port = (target or {}).get("port") or d.get("port")
+        svc = d.get("service")
+        if svc in ("http", "https"):
+            resp = tools.http_request(guard, tools.base_url_for(host, port))
+            server = resp.get("headers", {}).get("server") if resp else None
+            product, version = netservices.identify(svc, "", server)
+        else:
+            product, version = netservices.identify(svc, netservices.banner(guard, host, port), None)
+        if product == d.get("product") and version == d.get("version"):
+            return VerifyOutcome(True, [f"Re-read {host}:{port}: still {product} {version} "
+                                        f"(affected by {d.get('cve')})"])
+        return VerifyOutcome(False, [f"Version banner changed or not re-observed on {host}:{port}"])
+
+    def _probe_net_unauth(self, check, target, guard) -> list[ProbeOutcome]:
+        """Detect services left open without authentication (read-only probes)."""
+        host, port, svc = target["host"], target["port"], target.get("service")
+        services = (check.get("probe") or {}).get("services")
+        if services:  # generic "database exposed to the network" check
+            if svc in services and netservices.tcp_reachable(guard, host, port):
+                return [ProbeOutcome(
+                    type="exposed_service",
+                    title=f"{svc} database reachable over the network",
+                    severity="medium",
+                    description=f"A {svc} database on {host}:{port} accepts connections from the network; "
+                                f"databases should not be exposed to untrusted networks.",
+                    fix="Bind the database to localhost / a private interface and firewall the port.",
+                    evidence=f"{host}:{port} accepts {svc} connections",
+                    data={"host": host, "port": port, "service": svc})]
+            return []
+        if svc == "redis":
+            r = netservices.redis_unauth(guard, host, port)
+            if r.get("open"):
+                return [ProbeOutcome(
+                    type="unauth_service", title="Unauthenticated Redis exposed", severity="high",
+                    description=f"Redis on {host}:{port} answers commands without authentication; keys can be "
+                                f"read/overwritten and code execution is often possible.",
+                    fix="Require AUTH, enable protected-mode, and bind Redis to localhost / a trusted interface.",
+                    evidence=f"INFO on {host}:{port} returned server data without AUTH"
+                             + (f" (redis_version {r['version']})" if r.get("version") else ""),
+                    data={"host": host, "port": port, "service": "redis"})]
+        elif svc == "memcached":
+            r = netservices.memcached_unauth(guard, host, port)
+            if r.get("open"):
+                return [ProbeOutcome(
+                    type="unauth_service", title="Unauthenticated memcached exposed", severity="medium",
+                    description=f"memcached on {host}:{port} returns stats without authentication; cached data "
+                                f"is readable and the service is abusable for DDoS amplification.",
+                    fix="Enable SASL, disable UDP, and bind memcached to localhost / a trusted interface.",
+                    evidence=f"'stats' on {host}:{port} returned data without auth",
+                    data={"host": host, "port": port, "service": "memcached"})]
+        elif svc == "elasticsearch":
+            r = netservices.elasticsearch_open(guard, host, port)
+            if r.get("open"):
+                return [ProbeOutcome(
+                    type="unauth_service", title="Unauthenticated Elasticsearch exposed", severity="high",
+                    description=f"Elasticsearch on {host}:{port} serves cluster data without authentication; "
+                                f"all indexed data is readable.",
+                    fix="Enable the security realm (authentication + TLS) and restrict network access.",
+                    evidence=f"GET / on {host}:{port} returned cluster info without auth"
+                             + (f" (version {r['version']})" if r.get("version") else ""),
+                    data={"host": host, "port": port, "service": "elasticsearch"})]
+        elif svc == "ftp":
+            if netservices.ftp_anonymous(guard, host, port).get("open"):
+                return [ProbeOutcome(
+                    type="anonymous_access", title="Anonymous FTP enabled", severity="medium",
+                    description=f"The FTP server on {host}:{port} accepts the anonymous account.",
+                    fix="Disable anonymous access unless a public read-only area is explicitly intended.",
+                    evidence=f"USER anonymous on {host}:{port} returned 230 (login accepted)",
+                    data={"host": host, "port": port, "service": "ftp"})]
+        elif svc == "telnet":
+            if netservices.tcp_reachable(guard, host, port):
+                return [ProbeOutcome(
+                    type="insecure_protocol", title="Telnet service exposed (cleartext)", severity="medium",
+                    description=f"Telnet on {host}:{port} transmits credentials and sessions in cleartext.",
+                    fix="Disable Telnet and use SSH instead.",
+                    evidence=f"{host}:{port} accepts Telnet connections",
+                    data={"host": host, "port": port, "service": "telnet"})]
+        elif svc == "smb":
+            if port != 445:  # 139 needs a NetBIOS session first; 445 is direct-hosted SMB
+                return []
+            info = netservices.smb_info(guard, host, port)
+            out = []
+            if info.get("smbv1"):
+                out.append(ProbeOutcome(
+                    type="legacy_protocol", title="SMBv1 enabled", severity="high",
+                    description=f"The SMB server on {host}:{port} still accepts SMBv1, the deprecated protocol "
+                                f"behind wormable flaws such as EternalBlue (MS17-010).",
+                    fix="Disable SMBv1 and allow SMB 2/3 only.",
+                    evidence=f"SMB1 NEGOTIATE ('NT LM 0.12') to {host}:{port} was accepted",
+                    data={"host": host, "port": port, "service": "smb", "sub": "smbv1"}))
+            if info.get("signing_required") is False:
+                out.append(ProbeOutcome(
+                    type="smb_signing", title="SMB signing not required", severity="medium",
+                    description=f"The SMB server on {host}:{port} does not require message signing, which "
+                                f"enables NTLM relay and man-in-the-middle attacks.",
+                    fix="Require SMB signing (RequireSecuritySignature = 1) on servers and clients.",
+                    evidence="SMB2 NEGOTIATE response SecurityMode does not set SIGNING_REQUIRED",
+                    data={"host": host, "port": port, "service": "smb", "sub": "smb-signing"}))
+            return out
+        return []
+
+    def _probe_net_snmp(self, check, target, guard) -> list[ProbeOutcome]:
+        """SNMP is UDP, so recon runs this once per host rather than per TCP port."""
+        host, port = target["host"], target.get("port") or 161
+        r = netservices.snmp_default_community(guard, host, port)
+        if not r.get("open"):
+            return []
+        c = r["community"]
+        rw = c == "private"
+        return [ProbeOutcome(
+            type="unauth_service", title=f"SNMP accepts default community '{c}'",
+            severity="high" if rw else "medium",
+            description=f"The SNMP agent on {host}:{port}/udp answers queries with the default community "
+                        f"'{c}', disclosing device and network configuration"
+                        + (" ('private' is commonly configured with write access)." if rw else "."),
+            fix="Remove default communities; use SNMPv3 with authentication and restrict SNMP by ACL.",
+            evidence=f"SNMP GET sysDescr.0 with community '{c}' was answered"
+                     + (f": {r['sysdescr'][:80]}" if r.get("sysdescr") else ""),
+            data={"host": host, "port": port, "service": "snmp", "community": c})]
+
+    def _verify_net_unauth(self, check, finding, target, guard) -> VerifyOutcome:
+        d = finding.get("data") or {}
+        host = (target or {}).get("host") or d.get("host")
+        port = (target or {}).get("port") or d.get("port")
+        svc = d.get("service")
+        if svc == "redis":
+            ok = netservices.redis_unauth(guard, host, port).get("open")
+        elif svc == "memcached":
+            ok = netservices.memcached_unauth(guard, host, port).get("open")
+        elif svc == "elasticsearch":
+            ok = netservices.elasticsearch_open(guard, host, port).get("open")
+        elif svc == "ftp":
+            ok = netservices.ftp_anonymous(guard, host, port).get("open")
+        elif svc == "snmp":
+            ok = netservices.snmp_default_community(
+                guard, host, port, communities=(d.get("community") or "public",)).get("open")
+        elif svc == "smb":
+            info = netservices.smb_info(guard, host, port)
+            ok = info.get("smbv1") if d.get("sub") == "smbv1" else info.get("signing_required") is False
+        else:  # telnet / exposed database: reachability is the condition
+            ok = netservices.tcp_reachable(guard, host, port)
+        what = d.get("sub") or f"{svc} exposure"
+        if ok:
+            return VerifyOutcome(True, [f"Re-checked {host}:{port}: {what} re-confirmed"])
+        return VerifyOutcome(False, [f"{what} not reproduced on re-check of {host}:{port}"])
+
+    def _probe_tls_audit(self, check, target, guard) -> list[ProbeOutcome]:
+        host, port = target["host"], target["port"]
+        a = netservices.tls_audit(guard, host, port)
+        if not a.get("reachable"):
+            return []
+        out = []
+        cs = a.get("cert_status")
+        _CERT = {
+            "self-signed": ("Self-signed TLS certificate", "low",
+                            "presents a self-signed certificate; clients cannot verify the server's identity"),
+            "expired": ("Expired TLS certificate", "medium",
+                        "presents an expired certificate"),
+            "hostname-mismatch": ("TLS certificate hostname mismatch", "low",
+                                  "presents a certificate that does not match the host"),
+            "untrusted": ("Untrusted TLS certificate", "low",
+                          "presents a certificate not signed by a trusted CA"),
+        }
+        if cs in _CERT:
+            title, sev, phrase = _CERT[cs]
+            out.append(ProbeOutcome(
+                type="tls_certificate", title=title, severity=sev,
+                description=f"{host}:{port} {phrase}.",
+                fix="Install a valid certificate signed by a trusted CA whose SAN matches the hostname.",
+                evidence=f"Verifying TLS handshake to {host}:{port}: {cs}",
+                data={"host": host, "port": port, "sub": cs}))
+        if a.get("weak_protocol"):
+            out.append(ProbeOutcome(
+                type="tls_protocol", title=f"Obsolete TLS protocol {a.get('tls_version')}", severity="medium",
+                description=f"{host}:{port} negotiated {a.get('tls_version')}, an obsolete protocol with known weaknesses.",
+                fix="Disable SSLv3/TLS1.0/TLS1.1 and require TLS 1.2 or newer.",
+                evidence=f"TLS handshake negotiated {a.get('tls_version')}",
+                data={"host": host, "port": port, "sub": "weak_protocol"}))
+        return out
+
+    def _verify_tls_audit(self, check, finding, target, guard) -> VerifyOutcome:
+        d = finding.get("data") or {}
+        host = (target or {}).get("host") or d.get("host")
+        port = (target or {}).get("port") or d.get("port")
+        sub = d.get("sub")
+        a = netservices.tls_audit(guard, host, port)
+        if not a.get("reachable"):
+            return VerifyOutcome(False, ["TLS endpoint not reachable on re-check"])
+        ok = a.get("weak_protocol") if sub == "weak_protocol" else (a.get("cert_status") == sub)
+        if ok:
+            return VerifyOutcome(True, [f"Re-audited {host}:{port}: {sub} re-confirmed"])
+        return VerifyOutcome(False, [f"{sub} not reproduced on re-audit of {host}:{port}"])
+
+    # -- extended web probes -------------------------------------------------
+    def _probe_http_security_headers(self, check, target, guard) -> list[ProbeOutcome]:
+        base = target["base_url"]
+        resp = tools.http_request(guard, base + "/")
+        if not resp:
+            return []
+        h = resp.get("headers", {})
+        missing = [label for key, label in _SEC_HEADERS.items() if key not in h]
+        if base.startswith("https") and "strict-transport-security" not in h:
+            missing.append("Strict-Transport-Security")
+        if not missing:
+            return []
+        return [ProbeOutcome(
+            type="missing_security_headers", title="Missing HTTP security headers", severity="low",
+            description="The application does not set recommended security response headers: "
+                        + ", ".join(missing) + ".",
+            fix="Set Content-Security-Policy, X-Frame-Options, X-Content-Type-Options, and HSTS (over TLS).",
+            evidence=f"GET / response is missing: {', '.join(missing)}",
+            data={"base_url": base, "missing": missing})]
+
+    def _verify_http_security_headers(self, check, finding, target, guard) -> VerifyOutcome:
+        base = (target or {}).get("base_url") or (finding.get("data") or {}).get("base_url")
+        d = finding.get("data") or {}
+        resp = tools.http_request(guard, base + "/")
+        if not resp:
+            return VerifyOutcome(False, ["Could not re-fetch to re-check headers"])
+        h = resp.get("headers", {})
+        still = [label for label in d.get("missing", []) if label.lower() not in h]
+        if still:
+            return VerifyOutcome(True, [f"Re-checked GET /: still missing {', '.join(still)}"])
+        return VerifyOutcome(False, ["Security headers are present on re-check"])
+
+    def _probe_http_insecure_cookies(self, check, target, guard) -> list[ProbeOutcome]:
+        base = target["base_url"]
+        out, seen = [], set()
+        for path in ("/", "/login"):
+            resp = tools.http_request(guard, base + path)
+            sc = resp.get("headers", {}).get("set-cookie", "") if resp else ""
+            if not sc:
+                continue
+            name = sc.split("=", 1)[0].strip()
+            low = sc.lower()
+            issues = [a for a, tok in (("HttpOnly", "httponly"), ("SameSite", "samesite"))
+                      if tok not in low]
+            if base.startswith("https") and "secure" not in low:
+                issues.append("Secure")
+            if issues and name not in seen:
+                seen.add(name)
+                out.append(ProbeOutcome(
+                    type="insecure_cookie", title=f"Cookie '{name}' set without {', '.join(issues)}",
+                    severity="low",
+                    description=f"The cookie '{name}' set at {path} is missing the {', '.join(issues)} "
+                                f"attribute(s), weakening session protection.",
+                    fix="Set HttpOnly and SameSite on session cookies (and Secure over TLS).",
+                    evidence=f"Set-Cookie at {path} lacks: {', '.join(issues)}",
+                    data={"base_url": base, "path": path, "cookie": name, "issues": issues}))
+        return out
+
+    def _verify_http_insecure_cookies(self, check, finding, target, guard) -> VerifyOutcome:
+        base = (target or {}).get("base_url") or (finding.get("data") or {}).get("base_url")
+        d = finding.get("data") or {}
+        resp = tools.http_request(guard, base + d.get("path", "/"))
+        sc = resp.get("headers", {}).get("set-cookie", "") if resp else ""
+        still = [a for a in d.get("issues", []) if a.lower() not in sc.lower()]
+        if sc and still:
+            return VerifyOutcome(True, [f"Re-checked {d.get('path')}: cookie still lacks {', '.join(still)}"])
+        return VerifyOutcome(False, ["Cookie attributes present or no cookie on re-check"])
+
+    def _probe_http_cors(self, check, target, guard) -> list[ProbeOutcome]:
+        base = target["base_url"]
+        resp = tools.http_request(guard, base + "/", headers={"Origin": _CORS_EVIL})
+        if not resp:
+            return []
+        h = resp.get("headers", {})
+        acao = h.get("access-control-allow-origin", "")
+        creds = h.get("access-control-allow-credentials", "").lower() == "true"
+        if acao != _CORS_EVIL:
+            return []
+        return [ProbeOutcome(
+            type="cors_misconfig",
+            title="CORS reflects arbitrary Origin" + (" with credentials" if creds else ""),
+            severity="high" if creds else "medium",
+            description="The server reflects an attacker-supplied Origin in Access-Control-Allow-Origin"
+                        + (", together with Access-Control-Allow-Credentials: true — authenticated data "
+                           "can be read cross-origin." if creds else "."),
+            fix="Validate Origin against an allow-list; never reflect arbitrary origins with credentials.",
+            evidence=f"Origin: {_CORS_EVIL} -> Access-Control-Allow-Origin: {acao}"
+                     + ("; Access-Control-Allow-Credentials: true" if creds else ""),
+            data={"base_url": base, "credentials": creds})]
+
+    def _verify_http_cors(self, check, finding, target, guard) -> VerifyOutcome:
+        base = (target or {}).get("base_url") or (finding.get("data") or {}).get("base_url")
+        resp = tools.http_request(guard, base + "/", headers={"Origin": _CORS_EVIL})
+        if resp and resp.get("headers", {}).get("access-control-allow-origin") == _CORS_EVIL:
+            return VerifyOutcome(True, [f"Re-sent Origin {_CORS_EVIL}; still reflected in ACAO"])
+        return VerifyOutcome(False, ["Origin not reflected on re-check"])
+
+    def _probe_http_methods(self, check, target, guard) -> list[ProbeOutcome]:
+        base = target["base_url"]
+        resp = tools.http_request(guard, base + "/", method="OPTIONS")
+        allow = resp.get("headers", {}).get("allow", "") if resp else ""
+        methods = {m.strip().upper() for m in allow.split(",") if m.strip()}
+        risky = sorted(methods & _RISKY_METHODS)
+        trace_on = False
+        if "TRACE" in methods or not methods:  # actively confirm XST non-destructively
+            tr = tools.http_request(guard, base + "/", method="TRACE")
+            if tr and tr.get("status") == 200 and "TRACE" in (tr.get("body", "")[:200].upper()):
+                trace_on = True
+                if "TRACE" not in risky:
+                    risky.append("TRACE")
+        if not risky:
+            return []
+        sev = "medium" if {"TRACE", "PUT", "DELETE", "CONNECT"} & set(risky) else "low"
+        return [ProbeOutcome(
+            type="dangerous_http_methods", title=f"Dangerous HTTP methods enabled: {', '.join(risky)}",
+            severity=sev,
+            description=f"The server allows {', '.join(risky)}."
+                        + (" TRACE enables Cross-Site Tracing (XST)." if "TRACE" in risky else ""),
+            fix="Disable TRACE/TRACK and any write methods (PUT/DELETE) that are not required.",
+            evidence=(f"OPTIONS / Allow: {allow}" if allow else "")
+                     + (" ; TRACE echoed the request (XST)" if trace_on else ""),
+            data={"base_url": base, "methods": risky, "trace": trace_on})]
+
+    def _verify_http_methods(self, check, finding, target, guard) -> VerifyOutcome:
+        base = (target or {}).get("base_url") or (finding.get("data") or {}).get("base_url")
+        d = finding.get("data") or {}
+        if d.get("trace"):
+            tr = tools.http_request(guard, base + "/", method="TRACE")
+            if tr and tr.get("status") == 200 and "TRACE" in (tr.get("body", "")[:200].upper()):
+                return VerifyOutcome(True, ["Re-sent TRACE; server echoed the request (XST confirmed)"])
+        resp = tools.http_request(guard, base + "/", method="OPTIONS")
+        allow = resp.get("headers", {}).get("allow", "") if resp else ""
+        methods = {m.strip().upper() for m in allow.split(",") if m.strip()}
+        still = sorted(set(d.get("methods", [])) & methods)
+        if still:
+            return VerifyOutcome(True, [f"Re-checked OPTIONS: still allows {', '.join(still)}"])
+        return VerifyOutcome(False, ["Risky methods not confirmed on re-check"])
+
+    def _probe_http_open_redirect(self, check, target, guard) -> list[ProbeOutcome]:
+        base = target["base_url"]
+        paths = ["/"] + [d["path"] for d in (target.get("params") or [])]
+        seen_paths, out, tested = set(), [], 0
+        for path in paths:
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            for param in _REDIRECT_PARAMS:
+                if tested >= 40:
+                    break
+                tested += 1
+                resp = tools.http_request(guard, f"{base}{path}?{urlencode({param: _REDIRECT_EVIL})}")
+                if not resp:
+                    continue
+                loc = (resp.get("headers", {}) or {}).get("location", "")
+                if resp.get("status") in (301, 302, 303, 307, 308) and \
+                        (loc.startswith(_REDIRECT_EVIL) or loc.startswith("//nighttrace-oob")):
+                    out.append(ProbeOutcome(
+                        type="open_redirect", title=f"Open redirect at {path} ({param})", severity="medium",
+                        description=f"The '{param}' parameter at {path} redirects to an attacker-controlled URL.",
+                        fix="Allow-list redirect targets; never place user-controlled values in Location.",
+                        evidence=f"GET {path}?{param}=<external> -> {resp.get('status')} Location: {loc}",
+                        data={"base_url": base, "path": path, "param": param}))
+                    break
+            if len(out) >= 3:
+                break
+        return out
+
+    def _verify_http_open_redirect(self, check, finding, target, guard) -> VerifyOutcome:
+        base = (target or {}).get("base_url") or (finding.get("data") or {}).get("base_url")
+        d = finding.get("data") or {}
+        resp = tools.http_request(
+            guard, f"{base}{d.get('path', '/')}?{urlencode({d.get('param', 'next'): _REDIRECT_EVIL})}")
+        loc = (resp.get("headers", {}) or {}).get("location", "") if resp else ""
+        if resp and resp.get("status") in (301, 302, 303, 307, 308) and loc.startswith(_REDIRECT_EVIL):
+            return VerifyOutcome(True, [f"Re-tested: Location still redirects externally ({loc[:60]})"])
+        return VerifyOutcome(False, ["External redirect not reproduced on re-check"])
+
+    def _probe_http_backup_files(self, check, target, guard) -> list[ProbeOutcome]:
+        base = target["base_url"]
+        # Baseline: if a random path returns 200, the site is a catch-all, so only
+        # non-HTML responses or ones carrying a secret signature are trustworthy.
+        rnd = tools.http_request(guard, base + "/nt-" + secrets.token_hex(6))
+        catchall = bool(rnd and rnd.get("status") == 200)
+        out = []
+        for path in _BACKUP_PATHS:
+            resp = tools.http_request(guard, base + path)
+            if not resp or resp.get("status") != 200:
+                continue
+            body = resp.get("body", "") or ""
+            ctype = (resp.get("headers", {}) or {}).get("content-type", "").lower()
+            is_html = "text/html" in ctype or "<html" in body[:200].lower()
+            has_sig = any(s in body.lower() for s in _FILE_SIGS)
+            if has_sig or (not is_html and not catchall):
+                out.append(ProbeOutcome(
+                    type="exposed_backup_file", title=f"Exposed sensitive file {path}", severity="medium",
+                    description=f"{path} is downloadable and may expose source, configuration, or secrets.",
+                    fix="Remove backup/secret files from the web root and block access to dotfiles.",
+                    evidence=f"GET {path} -> 200 ({len(body)} bytes)" + (" with a secret signature" if has_sig else ""),
+                    data={"base_url": base, "path": path, "has_sig": has_sig}))
+            if len(out) >= 8:
+                break
+        return out
+
+    def _verify_http_backup_files(self, check, finding, target, guard) -> VerifyOutcome:
+        base = (target or {}).get("base_url") or (finding.get("data") or {}).get("base_url")
+        d = finding.get("data") or {}
+        resp = tools.http_request(guard, base + d.get("path", "/"))
+        if resp and resp.get("status") == 200:
+            body = resp.get("body", "") or ""
+            if d.get("has_sig"):
+                ok = any(s in body.lower() for s in _FILE_SIGS)
+            else:
+                ok = "text/html" not in (resp.get("headers", {}) or {}).get("content-type", "").lower()
+            if ok:
+                return VerifyOutcome(True, [f"Re-fetched {d.get('path')} -> 200, content re-confirmed"])
+        return VerifyOutcome(False, ["File not retrievable on re-check"])

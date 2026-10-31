@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import ipaddress
 
-from nighttrace import netdiscover, osfp, tools
+from nighttrace import netdiscover, netservices, osfp, tools
 from nighttrace.agents.base import Agent
-from nighttrace.models import AgentResult, AssetRec, Ptes, Surface, TaskSpec
+from nighttrace.models import AgentResult, AssetRec, FindingRec, Ptes, Surface, TaskSpec
 from nighttrace.reasoning import hypothesis
 
 SERVICES = {
@@ -105,11 +105,29 @@ class ReconAgent(Agent):
 
             for r in resolved:
                 port, banner, svc = r["port"], r["banner"], r["svc"]
-                product = r["product"] or (banner or None)
+                srv = http_server if svc in ("http", "https") else None
+                # Fingerprint product+version from whatever we have — the raw
+                # banner, the HTTP Server header, or nmap's product string — so the
+                # report names the software and the CVE checks have something to match.
+                ident_text = " ".join(t for t in (banner, r["product"]) if t)
+                fp_prod, fp_ver = netservices.identify(svc, ident_text, srv)
+                product = (f"{fp_prod} {fp_ver}" if fp_prod and fp_ver
+                           else (r["product"] or (banner or None)))
                 res.assets.append(AssetRec(
                     host=host, port=port, service=svc, product=product,
                     surface=Surface.NETWORK.value,
                     data={"banner": banner, "product": product, **host_os}))
+
+                # Run the declarative network-service checks against this port:
+                # version->CVE correlation, unauthenticated exposure, TLS audit.
+                net_target = {"host": host, "port": port, "service": svc,
+                              "banner": banner, "http_server": srv,
+                              "product": fp_prod, "version": fp_ver,
+                              "tls": port in tools.TLS_PORTS}
+                net_ctx = {"service": svc, "port": port, "tls": port in tools.TLS_PORTS}
+                self._run_net_checks(res, self.engine.applicable("network", net_ctx),
+                                     net_target, host, port)
+
                 if (svc and "http" in svc) or svc == "https":
                     res.followups.append(TaskSpec(
                         type="web", ptes=Ptes.VULN_ANALYSIS.value,
@@ -120,4 +138,33 @@ class ReconAgent(Agent):
                     res.hypotheses.extend(
                         h.as_dict() for h in
                         hypothesis.generate_hypotheses("http_alive", f"{host}:{port}"))
+
+            # SNMP is UDP, so it never appears in the TCP scan: probe it once per
+            # host (unless the scan is pinned to a port list that leaves out 161).
+            if not ports or 161 in ports:
+                snmp_checks = [c for c in self.engine.applicable(
+                                   "network", {"service": "snmp", "port": 161, "tls": False})
+                               if (c.get("when") or {}).get("service") == "snmp"]
+                if self._run_net_checks(res, snmp_checks,
+                                        {"host": host, "port": 161, "service": "snmp"}, host, 161):
+                    res.assets.append(AssetRec(
+                        host=host, port=161, service="snmp", surface=Surface.NETWORK.value,
+                        data={"protocol": "udp", **host_os}))
         return res
+
+    def _run_net_checks(self, res: AgentResult, checks: list[dict], target: dict,
+                        host: str, port: int) -> int:
+        """Probe one network target with each check. Every hit becomes a Suspected
+        finding the orchestrator sends to the verifier. Returns how many were found."""
+        found = 0
+        for check in checks:
+            ptes = check.get("ptes_phase", Ptes.VULN_ANALYSIS.value)
+            for o in self.engine.probe(check, target, self.guard):
+                found += 1
+                res.findings.append(FindingRec(
+                    title=o.title, type=o.type, surface=Surface.NETWORK.value, ptes=ptes,
+                    severity=o.severity, description=o.description, fix=o.fix,
+                    asset_host=host, asset_port=port, check_id=check.get("id"),
+                    evidence=[{"kind": "probe", "content": o.evidence}], data=o.data))
+                self.emit("finding", ptes, f"{host}:{port}: suspected {o.type} — {o.title}")
+        return found
