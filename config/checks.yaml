@@ -67,11 +67,34 @@ checks:
         - "/swagger.json"
         - "/actuator/health"
         - "/debug"
+        - "/index.php"
+        - "/index.php?p="
+        - "/index.php?p=ops"
+        - "/index.php?p=backups"
+        - "/vault"
+        - "/vault/"
+        - "/wiki"
+        - "/wiki/infra"
+        - "/wiki/zone"
       expect_status: [200, 401, 403]
       severity: low
     verify: {type: http_status, expect_status: [200, 401, 403]}
     severity: low
     fix: "Restrict access, require authentication, or remove the endpoint if it is not meant to be public."
+
+  - id: web-ip-spoofing-bypass
+    surface: web
+    ptes_phase: vulnerability_analysis
+    when: {service: http}
+    probe:
+      type: http_header_bypass
+      headers:
+        - {"X-Forwarded-For": "192.168.60.1"}
+        - {"X-Forwarded-For": "127.0.0.1"}
+        - {"X-Real-IP": "127.0.0.1"}
+    verify: {type: http_header_bypass}
+    severity: high
+    fix: "Do not trust client-supplied X-Forwarded-For headers from untrusted networks; configure reverse proxy to strip forwarding headers."
 
   - id: web-server-banner
     surface: web
@@ -106,7 +129,7 @@ checks:
     when: {service: http}
     probe:
       type: directory_listing
-      paths: ["/", "/images/", "/uploads/", "/files/", "/static/", "/backup/", "/assets/"]
+      paths: ["/", "/index.php", "/index.php?p=", "/ops/", "/backups/", "/vault/", "/images/", "/uploads/", "/files/", "/static/", "/backup/", "/assets/"]
     verify: {type: directory_listing}
     severity: low
     fix: "Disable automatic directory indexing on the web server."
