@@ -7,6 +7,7 @@ directly — they go through here, so the safety guarantee holds everywhere.
 """
 from __future__ import annotations
 
+import http.client
 import shutil
 import socket
 import subprocess
@@ -187,7 +188,9 @@ def http_request(guard: ScopeGuard, url: str, method: str = "GET",
         return _wrap(_opener.open(req, timeout=timeout))
     except error.HTTPError as e:  # 3xx (no-redirect) and 4xx/5xx arrive here
         return _wrap(e)
-    except (error.URLError, OSError, ValueError):
+    except (error.URLError, OSError, ValueError, http.client.HTTPException):
+        # HTTPException (e.g. BadStatusLine) happens when a non-HTTP service — SSH,
+        # FTP, a database — is probed as HTTP. Treat it as "not a web server".
         return None
 
 

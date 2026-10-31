@@ -8,7 +8,7 @@ writes one clean report — following the **PTES** methodology, from a single co
 **only ever inside the scope it is given**.
 
 ![Status](https://img.shields.io/badge/status-working%20reference%20impl-success)
-![Tests](https://img.shields.io/badge/tests-32%20passing-success)
+![Tests](https://img.shields.io/badge/tests-45%20passing-success)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![Orchestration](https://img.shields.io/badge/agents-LangGraph-7E56C2)
 ![API](https://img.shields.io/badge/API-FastAPI-009688)
@@ -1212,7 +1212,7 @@ so those constraints are structural, not optional:
 
 ## Project status
 
-A **working reference implementation** is in this repository and passes its test suite (32 tests,
+A **working reference implementation** is in this repository and passes its test suite (45 tests,
 including an end-to-end run against the bundled lab). It implements the full architecture above:
 
 - [x] **Spine** — scope loader, Scope Guard, blackboard store, autonomous orchestrator loop.
