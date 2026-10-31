@@ -1,17 +1,18 @@
-engagement: "mitigata-engagement"
+engagement: mitigata-engagement
 tier: breach
 scope:
   networks:
-    - 192.168.60.0/24
-    - 192.168.60.139
+  - 192.168.60.139
   hosts:
-    - 192.168.60.139
+  - 192.168.60.139
   binaries: []
   exclude: []
-  ports: [80, 8833]
+  ports:
+  - 80
+  - 8833
 limits:
   max_runtime_minutes: 20.0
   rate_limit_pps: 50
   destructive: false
 flags:
-  pattern: "(?:FLAG|MITIGATA)\\{.*?\\}"
+  pattern: FLAG\{.*?\}
