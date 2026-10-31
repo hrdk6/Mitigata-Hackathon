@@ -7,11 +7,9 @@ directly — they go through here, so the safety guarantee holds everywhere.
 """
 from __future__ import annotations
 
-import http.client
 import shutil
 import socket
 import subprocess
-import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib import error, request
 
@@ -24,7 +22,7 @@ USER_AGENT = "NightTrace/0.1 (authorized-scan; non-destructive)"
 DEFAULT_PORTS = [
     21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995,
     1433, 1521, 2049, 3000, 3306, 3389, 5000, 5432, 5900, 6379,
-    8000, 8008, 8080, 8081, 8443, 8833, 8888, 9000, 9200, 11211, 27017,
+    8000, 8008, 8080, 8081, 8443, 8888, 9000, 9200, 11211, 27017,
 ]
 
 # Ports we treat as HTTP(S) for the web agent.
@@ -173,8 +171,8 @@ def _banner(s: socket.socket) -> str:
 
 def http_request(guard: ScopeGuard, url: str, method: str = "GET",
                  data: str | bytes | None = None, headers: dict | None = None,
-                 timeout: float = 10.0, retries: int = 1) -> dict | None:
-    """Single scoped HTTP request with retries. Returns a dict or None if blocked/failed."""
+                 timeout: float = 6.0) -> dict | None:
+    """Single scoped HTTP request. Returns a dict or None if blocked/failed."""
     if not guard.check_url(url).allowed:
         return None
     body = data.encode() if isinstance(data, str) else data
@@ -182,19 +180,12 @@ def http_request(guard: ScopeGuard, url: str, method: str = "GET",
     req.add_header("User-Agent", USER_AGENT)
     for k, v in (headers or {}).items():
         req.add_header(k, v)
-    for attempt in range(1 + max(0, retries)):
-        try:
-            return _wrap(_opener.open(req, timeout=timeout))
-        except error.HTTPError as e:  # 3xx (no-redirect) and 4xx/5xx arrive here
-            return _wrap(e)
-        except (error.URLError, OSError, ValueError, http.client.HTTPException):
-            if attempt < retries:
-                time.sleep(0.3)
-                continue
-            return None
-        except Exception:
-            return None
-    return None
+    try:
+        return _wrap(_opener.open(req, timeout=timeout))
+    except error.HTTPError as e:  # 3xx (no-redirect) and 4xx/5xx arrive here
+        return _wrap(e)
+    except (error.URLError, OSError, ValueError):
+        return None
 
 
 def _wrap(resp) -> dict:

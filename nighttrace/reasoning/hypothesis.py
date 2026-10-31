@@ -50,7 +50,7 @@ _TEMPLATES: dict[str, list[dict]] = {
     "http_alive": [dict(
         tid="HYP-CONFIG-LEAK", title="Exposed Version Control & Config Secrets",
         category="information-disclosure", confidence=0.85, priority_boost=35,
-        suggested_checks=["web-git-exposure", "web-sensitive-paths", "web-directory-listing", "web-ip-spoofing-bypass"],
+        suggested_checks=["web-git-exposure", "web-sensitive-paths", "web-directory-listing"],
         rationale="Web roots frequently expose undeleted /.git or /.env files.")],
     "binary_present": [dict(
         tid="HYP-BINARY-SECRETS", title="Hardcoded Binary Secrets",

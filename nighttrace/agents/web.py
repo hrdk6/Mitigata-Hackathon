@@ -6,7 +6,6 @@ schedules a verification task so it is proven before it reaches the report.
 """
 from __future__ import annotations
 
-import html
 import re
 from urllib.parse import parse_qs, urljoin, urlparse
 
@@ -29,12 +28,6 @@ class WebAgent(Agent):
         res = AgentResult()
 
         root = tools.http_request(self.guard, base + "/")
-        if root is None:
-            # Tolerant fallback retry for non-standard or redirecting web roots
-            for entry in ("/index.php", "/index.html", "/"):
-                root = tools.http_request(self.guard, base + entry)
-                if root is not None:
-                    break
         if root is None:
             self.emit("web_scan", Ptes.VULN_ANALYSIS.value,
                       f"{base}: not reachable / out of scope", level="warn")
@@ -85,29 +78,11 @@ class WebAgent(Agent):
             if resp is None:
                 continue
             ordered.append(url)
-
-            # Follow in-scope redirects from Location header (301/302/307/308)
-            loc = (resp.get("headers", {}) or {}).get("location")
-            if loc:
-                nxt = urljoin(url, loc).split("#")[0]
-                pu = urlparse(nxt)
-                if pu.scheme in ("http", "https") and pu.netloc == host and nxt not in seen and nxt not in queue:
-                    queue.append(nxt)
-
-            body = resp.get("body", "")
-            for raw_href in _LINK_RE.findall(body):
-                href = html.unescape(raw_href).strip()
-                # Skip template literals or non-http links
-                if "<%" in href or "${" in href or href.startswith(("javascript:", "mailto:", "#")):
-                    continue
-                # Skip heavy downloads
-                if "dl=" in href or any(href.lower().endswith(ext) for ext in (".log", ".iso", ".zip", ".tar", ".gz", ".7z", ".bin")):
-                    continue
+            for href in _LINK_RE.findall(resp.get("body", "")):
                 nxt = urljoin(url, href).split("#")[0]
                 pu = urlparse(nxt)
-                if pu.scheme in ("http", "https") and pu.netloc == host and nxt not in seen and nxt not in queue:
+                if pu.scheme in ("http", "https") and pu.netloc == host and nxt not in seen:
                     queue.append(nxt)
-
         return ordered
 
     @staticmethod
@@ -126,11 +101,4 @@ class WebAgent(Agent):
                 if (path, key) not in seen:
                     seen.add((path, key))
                     out.append({"path": path, "param": key})
-        # If /index.php was seen with p, ensure view and dl are also registered as candidates
-        for (path, key) in list(seen):
-            if path == "/index.php" and key == "p":
-                for extra in ("view", "dl"):
-                    if (path, extra) not in seen:
-                        seen.add((path, extra))
-                        out.append({"path": path, "param": extra})
         return out[:40]

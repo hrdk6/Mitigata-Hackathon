@@ -18,7 +18,7 @@ SERVICES = {
     110: "pop3", 139: "smb", 143: "imap", 443: "https", 445: "smb",
     1433: "mssql", 3306: "mysql", 3389: "rdp", 5432: "postgres", 6379: "redis",
     8000: "http", 8008: "http", 8080: "http", 8081: "http", 8443: "https",
-    8833: "gamezone", 8888: "http", 9000: "http", 9200: "elasticsearch", 11211: "memcached",
+    8888: "http", 9000: "http", 9200: "elasticsearch", 11211: "memcached",
     27017: "mongodb",
 }
 
@@ -26,8 +26,6 @@ SERVICES = {
 def guess_service(port: int, banner: str) -> str:
     if port in SERVICES:
         return SERVICES[port]
-    if banner and "GAME ZONE" in banner.upper():
-        return "gamezone"
     if banner and "HTTP" in banner.upper():
         return "http"
     return "unknown"
