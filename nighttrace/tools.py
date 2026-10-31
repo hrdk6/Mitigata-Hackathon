@@ -7,7 +7,9 @@ directly — they go through here, so the safety guarantee holds everywhere.
 """
 from __future__ import annotations
 
+import shutil
 import socket
+import subprocess
 from urllib import error, request
 
 from nighttrace.safety.scope_guard import ScopeGuard
@@ -38,10 +40,10 @@ _opener = request.build_opener(_NoRedirect)
 
 
 def tcp_scan(guard: ScopeGuard, host: str, ports: list[int] | None = None,
-             timeout: float = 0.5) -> list[tuple[int, str]]:
-    """Non-destructive TCP connect scan. Returns [(port, banner), ...]."""
+             timeout: float = 0.5) -> list[dict]:
+    """Non-destructive TCP connect scan. Returns [{port, service, product, banner}, ...]."""
     ports = ports or DEFAULT_PORTS
-    found: list[tuple[int, str]] = []
+    found: list[dict] = []
     for port in ports:
         if not guard.check_network(host, port).allowed:
             continue
@@ -49,10 +51,56 @@ def tcp_scan(guard: ScopeGuard, host: str, ports: list[int] | None = None,
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(timeout)
                 if s.connect_ex((host, port)) == 0:
-                    found.append((port, _banner(s)))
+                    found.append({"port": port, "service": None, "product": None, "banner": _banner(s)})
         except OSError:
             pass
     return found
+
+
+def has_nmap() -> bool:
+    return shutil.which("nmap") is not None
+
+
+def nmap_scan(guard: ScopeGuard, host: str, ports: list[int] | None = None) -> list[dict]:
+    """Discovery via nmap when available — richer service/version detection.
+
+    Non-destructive: a TCP connect scan (-sT) with version detection (-sV). The
+    host is scope-checked before nmap runs, and only our port list is scanned.
+    """
+    if not guard.check_network(host).allowed:
+        return []
+    port_arg = ",".join(str(p) for p in (ports or DEFAULT_PORTS))
+    rate = max(guard.config.limits.rate_limit_pps, 10)
+    cmd = ["nmap", "-Pn", "-sT", "-sV", "--open", "-oG", "-",
+           "--max-rate", str(rate), "-p", port_arg, host]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    out: list[dict] = []
+    for line in proc.stdout.splitlines():
+        if "Ports:" not in line:
+            continue
+        for entry in line.split("Ports:", 1)[1].split(","):
+            f = entry.strip().split("/")
+            if len(f) < 5 or f[1] != "open":
+                continue
+            try:
+                port = int(f[0])
+            except ValueError:
+                continue
+            product = f[6].strip() if len(f) > 6 and f[6].strip() else None
+            out.append({"port": port, "service": f[4] or None, "product": product, "banner": ""})
+    return out
+
+
+def discover(guard: ScopeGuard, host: str, ports: list[int] | None = None) -> list[dict]:
+    """Pick the best available discovery method: nmap if present, else connect scan."""
+    if has_nmap():
+        res = nmap_scan(guard, host, ports)
+        if res:
+            return res
+    return tcp_scan(guard, host, ports)
 
 
 def _banner(s: socket.socket) -> str:

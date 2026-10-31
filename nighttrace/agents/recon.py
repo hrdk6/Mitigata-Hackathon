@@ -47,24 +47,28 @@ class ReconAgent(Agent):
                 hosts = []
 
         ports = self.config.scope.ports or None
+        via = "nmap" if tools.has_nmap() else "connect-scan"
         for host in hosts:
-            open_ports = tools.tcp_scan(self.guard, host, ports)
+            open_ports = tools.discover(self.guard, host, ports)
             if open_ports:
-                listing = ", ".join(str(p) for p, _ in open_ports)
+                listing = ", ".join(str(d["port"]) for d in open_ports)
                 self.emit("port_scan", Ptes.INTEL_GATHERING.value,
-                          f"{host}: {len(open_ports)} open port(s): {listing}")
+                          f"{host}: {len(open_ports)} open port(s) via {via}: {listing}")
             else:
                 self.emit("port_scan", Ptes.INTEL_GATHERING.value,
                           f"{host}: no open ports found in scope")
-            for port, banner in open_ports:
-                svc = guess_service(port, banner)
-                if svc == "unknown":  # actively confirm HTTP on non-standard ports
+            for d in open_ports:
+                port = d["port"]
+                banner = d.get("banner") or ""
+                svc = d.get("service") or guess_service(port, banner)
+                if not svc or svc == "unknown":  # actively confirm HTTP on non-standard ports
                     if tools.http_request(self.guard, f"http://{host}:{port}/") is not None:
                         svc = "http"
+                product = d.get("product") or (banner or None)
                 res.assets.append(AssetRec(host=host, port=port, service=svc,
-                                           product=banner or None, surface=Surface.NETWORK.value,
-                                           data={"banner": banner}))
-                if svc in ("http", "https"):
+                                           product=product, surface=Surface.NETWORK.value,
+                                           data={"banner": banner, "product": product}))
+                if (svc and "http" in svc) or svc == "https":
                     res.followups.append(TaskSpec(
                         type="web", ptes=Ptes.VULN_ANALYSIS.value,
                         target={"host": host, "port": port},

@@ -12,7 +12,16 @@ checks:
       paths: ["/login"]
       username_field: username
       password_field: password
-      credentials: [["admin", "admin"], ["admin", "password"], ["administrator", "admin"], ["root", "root"]]
+      credentials:
+        - ["admin", "admin"]
+        - ["admin", "password"]
+        - ["admin", "admin123"]
+        - ["administrator", "admin"]
+        - ["root", "root"]
+        - ["root", "toor"]
+        - ["test", "test"]
+        - ["guest", "guest"]
+        - ["user", "user"]
       fail_contains: "Invalid"
     verify:
       type: http_login
@@ -44,7 +53,20 @@ checks:
     when: {service: http}
     probe:
       type: http_paths
-      paths: ["/admin", "/backup", "/robots.txt", "/.env", "/server-status"]
+      paths:
+        - "/admin"
+        - "/backup"
+        - "/backup.zip"
+        - "/robots.txt"
+        - "/.env"
+        - "/.git/HEAD"
+        - "/config.php.bak"
+        - "/server-status"
+        - "/phpinfo.php"
+        - "/.htaccess"
+        - "/swagger.json"
+        - "/actuator/health"
+        - "/debug"
       expect_status: [200, 401, 403]
       severity: low
     verify: {type: http_status, expect_status: [200, 401, 403]}
@@ -60,6 +82,35 @@ checks:
     severity: low
     fix: "Suppress or genericise the Server header to avoid version fingerprinting."
 
+  - id: web-sql-injection
+    surface: web
+    ptes_phase: vulnerability_analysis
+    when: {service: http}
+    probe: {type: sql_injection, param: id}
+    verify: {type: sql_injection}
+    severity: high
+    fix: "Use parameterised queries / prepared statements; run the DB account with least privilege."
+
+  - id: web-path-traversal
+    surface: web
+    ptes_phase: vulnerability_analysis
+    when: {service: http}
+    probe: {type: path_traversal, param: file}
+    verify: {type: path_traversal}
+    severity: high
+    fix: "Canonicalise and allow-list file paths; keep user input out of filesystem APIs."
+
+  - id: web-directory-listing
+    surface: web
+    ptes_phase: intelligence_gathering
+    when: {service: http}
+    probe:
+      type: directory_listing
+      paths: ["/", "/images/", "/uploads/", "/files/", "/static/", "/backup/", "/assets/"]
+    verify: {type: directory_listing}
+    severity: low
+    fix: "Disable automatic directory indexing on the web server."
+
   - id: bin-weak-strings
     surface: binary
     ptes_phase: vulnerability_analysis
@@ -69,7 +120,11 @@ checks:
         - "(?i)pass(word|wd)?\\s*[:=]\\s*\\S+"
         - "(?i)secret\\s*[:=]\\s*\\S+"
         - "(?i)api[_-]?key\\s*[:=]\\s*\\S+"
-      unsafe_functions: ["gets", "strcpy", "strcat", "sprintf", "system", "popen", "exec"]
+        - "(?i)token\\s*[:=]\\s*\\S+"
+        - "AKIA[0-9A-Z]{16}"
+        - "-----BEGIN (?:RSA|OPENSSH|EC|DSA|PRIVATE) ?KEY-----"
+        - "(?i)(?:mysql|postgres|mongodb)://\\S+:\\S+@\\S+"
+      unsafe_functions: ["gets", "strcpy", "strcat", "sprintf", "vsprintf", "system", "popen", "exec", "scanf", "memcpy"]
     verify: {type: binary_strings}
     severity: high
     fix: "Remove embedded secrets; replace unsafe functions with bounded-length safe equivalents."

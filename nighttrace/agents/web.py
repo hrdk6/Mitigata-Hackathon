@@ -7,7 +7,7 @@ schedules a verification task so it is proven before it reaches the report.
 from __future__ import annotations
 
 import re
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 from nighttrace import tools
 from nighttrace.agents.base import Agent
@@ -32,11 +32,14 @@ class WebAgent(Agent):
             return res
 
         pages = self._crawl(base)
-        self.emit("crawl", Ptes.INTEL_GATHERING.value, f"{base}: crawled {len(pages)} endpoint(s)")
+        params = self._params_from(pages)
+        self.emit("crawl", Ptes.INTEL_GATHERING.value,
+                  f"{base}: crawled {len(pages)} endpoint(s), {len(params)} parameter(s) to test")
         res.assets.append(AssetRec(host=host, port=port, service="http",
-                                   surface=Surface.WEB.value, data={"base_url": base, "endpoints": pages}))
+                                   surface=Surface.WEB.value,
+                                   data={"base_url": base, "endpoints": pages, "params": params}))
 
-        target = {"host": host, "port": port, "base_url": base}
+        target = {"host": host, "port": port, "base_url": base, "params": params}
         for check in self.engine.applicable("web", {"service": "http"}):
             for o in self.engine.probe(check, target, self.guard):
                 res.findings.append(FindingRec(
@@ -71,3 +74,21 @@ class WebAgent(Agent):
                 if pu.scheme in ("http", "https") and pu.netloc == host and nxt not in seen:
                     queue.append(nxt)
         return ordered
+
+    @staticmethod
+    def _params_from(pages: list[str]) -> list[dict]:
+        """Collect (path, query-parameter) pairs discovered during the crawl so
+        checks can be run against real, app-specific endpoints — not just the
+        ones hard-coded in checks.yaml."""
+        out: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for url in pages:
+            pu = urlparse(url)
+            if not pu.query:
+                continue
+            path = pu.path or "/"
+            for key in parse_qs(pu.query):
+                if (path, key) not in seen:
+                    seen.add((path, key))
+                    out.append({"path": path, "param": key})
+        return out[:40]

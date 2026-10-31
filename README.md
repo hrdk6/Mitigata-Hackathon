@@ -781,6 +781,47 @@ curl http://localhost:8000/targets/5/findings
 curl "http://localhost:8000/report?format=md" -o reports/report.md
 ```
 
+### Running against the judges' assigned network
+
+NightTrace is **target-agnostic** — the demo and a real engagement run the exact same code path. At
+the hackathon:
+
+1. Run NightTrace from a machine that can reach the lab (the network / VPN the organizers give you).
+2. Put the **exact assigned scope** in `config/scope.yaml`: their ranges/hosts under
+   `networks`/`hosts`, the provided binaries under `binaries`, anything off-limits under `exclude`,
+   and your chosen `tier`.
+3. Run it:
+
+   ```bash
+   nighttrace run --scope config/scope.yaml --out reports/
+   nighttrace serve --scope config/scope.yaml      # or: live dashboard during the run
+   ```
+
+If `nmap` is installed it is used automatically for richer service/version detection; otherwise a
+built-in connect scan is used. Add `--ground-truth truth.yaml` to self-grade if the organizers
+provide one.
+
+**What runs on any network today**
+
+- **Discovery** — live hosts, open ports, service/version (nmap or built-in connect scan).
+- **Web** — default credentials, exposed `.git`, reflected XSS, error-based **SQL injection**,
+  **path traversal / LFI**, directory listing, sensitive/backup files, version disclosure — tested
+  against both configured paths **and parameters discovered while crawling** the real app.
+- **Binary** — hard-coded secrets (passwords, API keys, private keys, DB connection strings), unsafe
+  C functions, and `checksec`-style missing mitigations (no PIE / no canary) on ELF files.
+- Every finding is **verified with captured evidence**, chained into an attack path, and reported —
+  strictly in-scope and non-destructive throughout.
+
+**Honest limits (most are extendable via `config/checks.yaml`, no core code)**
+
+- Binary analysis is static strings + ELF-header `checksec`; it does **not** decompile or run symbolic
+  execution (Ghidra / radare2 / angr are not wired in yet).
+- SQL-injection detection is error-based; **blind/time-based SQLi and OS command injection are not
+  implemented**.
+- Logic flaws (auth bypass, IDOR, business logic) are outside the automated checks.
+- New detections of an existing handler type (paths, parameters, credential lists, string patterns)
+  are pure config; a genuinely new vulnerability class needs a new handler in `checks/engine.py`.
+
 ---
 
 ## ⚙️ Configuration reference

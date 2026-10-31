@@ -63,6 +63,36 @@ def _mask(s: str) -> str:
     return (m.group(1) + masked)[:64]
 
 
+# Signatures used for non-destructive, read-only detection.
+_SQL_ERRORS = (
+    "sql syntax", "mysql_fetch", "you have an error in your sql", "ora-",
+    "sqlite", "sqlstate", "unclosed quotation", "odbc", "pg::", "psql:",
+    "warning: pg_", "syntax error at or near", "quoted string not properly terminated",
+)
+_TRAVERSAL = (
+    "../../../../../../etc/passwd",
+    "..\\..\\..\\..\\..\\windows\\win.ini",
+    "....//....//....//....//etc/passwd",
+)
+_SQL_PROBE = "1'"   # a single quote — read-only, non-destructive SQL-error probe
+_SQL_SAFE = "1"
+
+
+def _sql_error(body: str) -> bool:
+    low = body.lower()
+    return any(sig in low for sig in _SQL_ERRORS)
+
+
+def _traversal_hit(body: str) -> bool:
+    low = body.lower()
+    return ("root:x:0:0" in body) or ("[extensions]" in low) or ("16-bit app support" in low)
+
+
+def _dir_listing(body: str) -> bool:
+    low = body.lower()
+    return "index of /" in low or "directory listing for" in low
+
+
 class CheckEngine:
     def __init__(self, checks: list[dict], flag_pattern: str = r"FLAG\{.*?\}"):
         self.checks = checks
@@ -187,38 +217,140 @@ class CheckEngine:
             return VerifyOutcome(True, ev)
         return VerifyOutcome(False, ["Could not re-read the exposed repository config"])
 
+    def _candidates(self, check: dict, target: dict) -> list[tuple[str, str]]:
+        """(path, param) pairs to test: those configured on the check plus any the
+        crawler discovered. This is what lets a check hit an unknown app."""
+        p = check.get("probe", {})
+        param = p.get("param")
+        out: list[tuple[str, str]] = []
+        for path in p.get("paths", []) or []:
+            if param:
+                out.append((path, param))
+        for d in target.get("params", []) or []:
+            out.append((d["path"], d.get("param") or param or "q"))
+        seen, res = set(), []
+        for t in out:
+            if t not in seen:
+                seen.add(t)
+                res.append(t)
+        return res[:15]
+
     def _probe_http_reflected_input(self, check, target, guard) -> list[ProbeOutcome]:
-        p = check["probe"]
-        base = target["base_url"]
-        param = p.get("param", "q")
         token = "nt" + secrets.token_hex(4)
         marker = f"{token}<x>"
-        for path in p.get("paths", ["/"]):
-            url = f"{base}{path}?{urlencode({param: marker})}"
-            resp = tools.http_request(guard, url)
-            if resp and marker in resp.get("body", ""):  # reflected unescaped (the raw '<x>' survived)
-                return [ProbeOutcome(
+        base = target["base_url"]
+        out = []
+        for path, param in self._candidates(check, target):
+            resp = tools.http_request(guard, f"{base}{path}?{urlencode({param: marker})}")
+            if resp and marker in resp.get("body", ""):  # raw '<x>' survived -> unescaped
+                out.append(ProbeOutcome(
                     type="reflected_input",
-                    title=f"Reflected unescaped input at {path}",
+                    title=f"Reflected unescaped input at {path} ({param})",
                     severity="medium",
-                    description=f"The '{param}' parameter at {path} is reflected into the response "
-                                f"without output encoding (cross-site scripting indicator).",
-                    fix="Context-aware output encoding on all user-controlled values; add a CSP.",
+                    description=f"The '{param}' parameter at {path} is reflected without output "
+                                f"encoding (cross-site scripting indicator).",
+                    fix="Apply context-aware output encoding to user-controlled values; add a CSP.",
                     evidence=f"GET {path}?{param}=<marker> reflected the raw marker unescaped",
-                    data={"path": path, "param": param})]
-        return []
+                    data={"path": path, "param": param}))
+            if len(out) >= 5:
+                break
+        return out
 
     def _verify_http_reflected_input(self, check, finding, target, guard) -> VerifyOutcome:
         d = finding.get("data") or {}
-        base = target["base_url"]
         token = "nt" + secrets.token_hex(4)
         marker = f"{token}<x>"
-        url = f"{base}{d.get('path', '/')}?{urlencode({d.get('param', 'q'): marker})}"
+        url = f"{target['base_url']}{d.get('path', '/')}?{urlencode({d.get('param', 'q'): marker})}"
         resp = tools.http_request(guard, url)
         if resp and marker in resp.get("body", ""):
-            return VerifyOutcome(True, [f"A fresh unique marker '{marker}' was reflected unescaped — "
-                                        f"XSS confirmed, non-destructively"])
+            return VerifyOutcome(True, [f"A fresh unique marker '{marker}' was reflected unescaped "
+                                        f"— confirmed non-destructively"])
         return VerifyOutcome(False, ["Marker was not reflected unescaped on re-test"])
+
+    # -- SQL injection (error-based, read-only / non-destructive) -----------
+    def _probe_sql_injection(self, check, target, guard) -> list[ProbeOutcome]:
+        base = target["base_url"]
+        out = []
+        for path, param in self._candidates(check, target):
+            resp = tools.http_request(guard, f"{base}{path}?{urlencode({param: _SQL_PROBE})}")
+            if resp and _sql_error(resp.get("body", "")):
+                out.append(ProbeOutcome(
+                    type="sql_injection",
+                    title=f"SQL injection at {path} ({param})",
+                    severity="high",
+                    description=f"The '{param}' parameter at {path} returns a database error when sent a "
+                                f"single quote — a SQL injection indicator.",
+                    fix="Use parameterised queries / prepared statements; never concatenate user input into SQL.",
+                    evidence=f"GET {path}?{param}=1' returned a database error signature",
+                    data={"path": path, "param": param}))
+            if len(out) >= 5:
+                break
+        return out
+
+    def _verify_sql_injection(self, check, finding, target, guard) -> VerifyOutcome:
+        d = finding.get("data") or {}
+        base = target["base_url"]
+        path, param = d.get("path", "/"), d.get("param", "id")
+        bad = tools.http_request(guard, f"{base}{path}?{urlencode({param: _SQL_PROBE})}")
+        good = tools.http_request(guard, f"{base}{path}?{urlencode({param: _SQL_SAFE})}")
+        if bad and _sql_error(bad.get("body", "")) and not (good and _sql_error(good.get("body", ""))):
+            return VerifyOutcome(True, [f"'{param}=1'' triggers a DB error while '{param}=1' does not "
+                                        f"— confirmed read-only"])
+        return VerifyOutcome(False, ["No differential database error on re-test"])
+
+    # -- Path traversal / LFI (reads a benign known system file) ------------
+    def _probe_path_traversal(self, check, target, guard) -> list[ProbeOutcome]:
+        base = target["base_url"]
+        out = []
+        for path, param in self._candidates(check, target):
+            for payload in _TRAVERSAL:
+                resp = tools.http_request(guard, f"{base}{path}?{urlencode({param: payload})}")
+                if resp and _traversal_hit(resp.get("body", "")):
+                    out.append(ProbeOutcome(
+                        type="path_traversal",
+                        title=f"Path traversal / LFI at {path} ({param})",
+                        severity="high",
+                        description=f"The '{param}' parameter at {path} can read files outside the web root.",
+                        fix="Canonicalise and validate paths against an allow-list; keep user input out of file APIs.",
+                        evidence=f"GET {path}?{param}=<traversal> returned a known system-file signature",
+                        data={"path": path, "param": param, "payload": payload}))
+                    break
+            if len(out) >= 5:
+                break
+        return out
+
+    def _verify_path_traversal(self, check, finding, target, guard) -> VerifyOutcome:
+        d = finding.get("data") or {}
+        url = (f"{target['base_url']}{d.get('path', '/')}?"
+               f"{urlencode({d.get('param', 'file'): d.get('payload', '')})}")
+        resp = tools.http_request(guard, url)
+        if resp and _traversal_hit(resp.get("body", "")):
+            return VerifyOutcome(True, ["Re-read a known system file through the parameter — confirmed"])
+        return VerifyOutcome(False, ["System-file signature not returned on re-test"])
+
+    # -- Directory listing ---------------------------------------------------
+    def _probe_directory_listing(self, check, target, guard) -> list[ProbeOutcome]:
+        base = target["base_url"]
+        out = []
+        for d in check["probe"].get("paths", ["/"]):
+            resp = tools.http_request(guard, base + d)
+            if resp and resp["status"] == 200 and _dir_listing(resp.get("body", "")):
+                out.append(ProbeOutcome(
+                    type="directory_listing",
+                    title=f"Directory listing enabled at {d}",
+                    severity="low",
+                    description=f"{d} returns an auto-generated directory index, disclosing file names.",
+                    fix="Disable automatic directory indexing on the web server.",
+                    evidence=f"GET {d} -> HTTP 200 with a directory index",
+                    data={"path": d}))
+        return out
+
+    def _verify_directory_listing(self, check, finding, target, guard) -> VerifyOutcome:
+        d = finding.get("data") or {}
+        resp = tools.http_request(guard, target["base_url"] + d.get("path", "/"))
+        if resp and resp["status"] == 200 and _dir_listing(resp.get("body", "")):
+            return VerifyOutcome(True, [f"GET {d.get('path')} re-confirmed a directory index"])
+        return VerifyOutcome(False, ["No directory index on re-test"])
 
     def _probe_http_paths(self, check, target, guard) -> list[ProbeOutcome]:
         p = check["probe"]
