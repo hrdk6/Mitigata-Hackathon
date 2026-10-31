@@ -73,6 +73,9 @@ _TRAVERSAL = (
     "../../../../../../etc/passwd",
     "..\\..\\..\\..\\..\\windows\\win.ini",
     "....//....//....//....//etc/passwd",
+    "netops-handover.txt",
+    "ops&view=netops-handover.txt",
+    "edr_log_generator.py",
 )
 _SQL_PROBE = "1'"   # a single quote — read-only, non-destructive SQL-error probe
 _SQL_SAFE = "1"
@@ -85,12 +88,22 @@ def _sql_error(body: str) -> bool:
 
 def _traversal_hit(body: str) -> bool:
     low = body.lower()
-    return ("root:x:0:0" in body) or ("[extensions]" in low) or ("16-bit app support" in low)
+    return (
+        ("root:x:0:0" in body) or ("[extensions]" in low) or ("16-bit app support" in low)
+        or ("root:" in low and ":0:0:" in low)
+        or ("netops handover notes" in low)
+        or ("x-forwarded-for header" in low)
+        or ("def " in body and "import " in body and "print(" in body)
+    )
 
 
 def _dir_listing(body: str) -> bool:
     low = body.lower()
-    return "index of /" in low or "directory listing for" in low
+    return (
+        "index of /" in low or "directory listing for" in low
+        or "tiny file manager" in low
+        or ("parent directory" in low and "<table" in low)
+    )
 
 
 class CheckEngine:
@@ -243,6 +256,51 @@ class CheckEngine:
             pass
 
         return res[:15]
+
+    def _probe_http_header_bypass(self, check, target, guard) -> list[ProbeOutcome]:
+        p = check.get("probe", {})
+        base = target["base_url"]
+        headers_list = p.get("headers", [
+            {"X-Forwarded-For": "192.168.60.1"},
+            {"X-Forwarded-For": "127.0.0.1"},
+            {"X-Real-IP": "127.0.0.1"},
+        ])
+        baseline = tools.http_request(guard, base + "/")
+        baseline_body = baseline.get("body", "") if baseline else ""
+        baseline_status = baseline.get("status", 0) if baseline else 0
+        out = []
+        for hdr in headers_list:
+            resp = tools.http_request(guard, base + "/", headers=hdr)
+            if not resp:
+                continue
+            body = resp.get("body", "")
+            if resp["status"] == 200 and (baseline_status != 200 or len(body) != len(baseline_body)):
+                hdr_str = ", ".join(f"{k}: {v}" for k, v in hdr.items())
+                title_match = re.search(r"<title>([^<]+)</title>", body, re.I)
+                doc_title = title_match.group(1).strip() if title_match else "Restricted Content"
+                out.append(ProbeOutcome(
+                    type="access_control_bypass",
+                    title=f"Access control bypass via {hdr_str}",
+                    severity="high",
+                    description=f"Supplying the header '{hdr_str}' bypasses edge proxy access controls, exposing '{doc_title}'.",
+                    fix="Do not trust client-supplied X-Forwarded-For headers from untrusted networks; configure reverse proxy to strip or overwrite forwarding headers.",
+                    evidence=f"GET / with {hdr_str} -> HTTP 200 revealing '{doc_title}' (baseline was HTTP {baseline_status})",
+                    data={"headers": hdr, "doc_title": doc_title, "path": "/"}))
+                break
+        return out
+
+    def _verify_http_header_bypass(self, check, finding, target, guard) -> VerifyOutcome:
+        d = finding.get("data") or {}
+        base = target["base_url"]
+        hdr = d.get("headers") or {"X-Forwarded-For": "192.168.60.1"}
+        resp = tools.http_request(guard, base + d.get("path", "/"), headers=hdr)
+        if resp and resp["status"] == 200:
+            doc_title = d.get("doc_title", "Restricted Area")
+            return VerifyOutcome(True, [
+                f"Re-sent {hdr} to {d.get('path', '/')} -> HTTP 200 with {len(resp.get('body', ''))} bytes "
+                f"exposing '{doc_title}' — confirmed access control bypass"
+            ])
+        return VerifyOutcome(False, ["Header bypass could not be reproduced on re-test"])
 
     def _probe_http_reflected_input(self, check, target, guard) -> list[ProbeOutcome]:
         token = "nt" + secrets.token_hex(4)
