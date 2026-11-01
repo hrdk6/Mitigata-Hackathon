@@ -1,10 +1,11 @@
 engagement: mitigata-engagement
 tier: deep
 scope:
-  networks: []
-  hosts: []
-  urls:
-  - https://pentest-ground.com:4280
+  networks:
+  - 192.168.60.139
+  hosts:
+  - 192.168.60.139
+  urls: []
   binaries: []
   exclude: []
   ports: []
