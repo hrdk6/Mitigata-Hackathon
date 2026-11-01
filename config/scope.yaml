@@ -2,16 +2,15 @@ engagement: mitigata-engagement
 tier: deep
 scope:
   networks: []
-  hosts:
-  - 192.168.60.139
+  hosts: []
   urls:
-  - https://pentest-ground.com:81
+  - https://pentest-ground.com:4280
   binaries: []
   exclude: []
   ports: []
 limits:
   max_runtime_minutes: 20.0
-  rate_limit_pps: 500
+  rate_limit_pps: 50
   destructive: false
 flags:
   pattern: FLAG\{.*?\}

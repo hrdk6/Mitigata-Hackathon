@@ -114,27 +114,6 @@ checks:
     severity: low
     fix: "Disable debug/verbose errors in production; never expose absolute server file paths."
 
-  - id: web-basic-auth
-    surface: web
-    ptes_phase: vulnerability_analysis
-    when: {service: http}
-    probe: {type: http_basic_auth}
-    verify: {type: http_basic_auth}
-    severity: medium
-    fix: "Serve Basic auth only over HTTPS; set strong credentials and add rate limiting/lockout."
-
-  - id: web-passive-audit
-    surface: web
-    ptes_phase: vulnerability_analysis
-    when: {service: http}
-    # One broad, high-recall pass: security.txt, cross-domain policies, OpenAPI/
-    # Swagger exposure, PEM private keys, email & comment disclosure, secrets in
-    # URLs, cleartext password forms, mixed content, loose cookie scope.
-    probe: {type: http_passive}
-    verify: {type: http_passive}
-    severity: low
-    fix: "Remove the specific exposure reported in each finding's evidence."
-
   - id: web-sql-injection
     surface: web
     ptes_phase: vulnerability_analysis

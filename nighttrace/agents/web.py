@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 from nighttrace import tools
 from nighttrace.agents.base import Agent
-from nighttrace.models import AgentResult, AssetRec, FindingRec, Ptes, Status, Surface
+from nighttrace.models import AgentResult, AssetRec, FindingRec, Ptes, Surface
 from nighttrace.reasoning import hypothesis
 
 _LINK_RE = re.compile(r'(?:href|src|action)=["\']([^"\'#]+)', re.I)
@@ -57,7 +57,7 @@ class WebAgent(Agent):
                       f"{base}: not reachable / out of scope", level="warn")
             return res
 
-        pages, page_cache = self._crawl(base)
+        pages = self._crawl(base)
         params = self._params_from(pages)
         self.emit("crawl", Ptes.INTEL_GATHERING.value,
                   f"{base}: crawled {len(pages)} endpoint(s), {len(params)} parameter(s) to test")
@@ -74,7 +74,7 @@ class WebAgent(Agent):
                                   hypothesis.generate_hypotheses("params_found", base))
 
         target = {"host": host, "port": port, "base_url": base,
-                  "params": params, "endpoints": pages, "page_cache": page_cache}
+                  "params": params, "endpoints": pages}
         for check in self.engine.applicable("web", {"service": "http"}):
             for o in self.engine.probe(check, target, self.guard):
                 res.findings.append(FindingRec(
@@ -86,37 +86,14 @@ class WebAgent(Agent):
                     data={**o.data, "base_url": base}))
                 self.emit("finding", check.get("ptes_phase", Ptes.VULN_ANALYSIS.value),
                           f"{base}: suspected {o.type} — {o.title}")
-
-        # External engine (B-4 extension): run nuclei's community template library
-        # against this in-scope web service for broad, up-to-date coverage. nuclei
-        # already validates each match, so its findings land Confirmed directly.
-        if tools.has_nuclei():
-            nres = tools.nuclei_scan(self.guard, base)
-            for r in nres:
-                sev = r["severity"] if r["severity"] in ("critical", "high", "medium", "low", "info") else "info"
-                res.findings.append(FindingRec(
-                    title=r["name"], type="nuclei", surface=Surface.WEB.value,
-                    ptes=Ptes.VULN_ANALYSIS.value, severity=sev, status=Status.CONFIRMED.value,
-                    description=(r["description"] or f"nuclei template '{r['template']}' matched.")
-                                + (f" [tags: {', '.join(r['tags'][:6])}]" if r.get("tags") else ""),
-                    fix="Review the nuclei template reference and remediate the underlying issue.",
-                    asset_host=host, asset_port=port, check_id=f"nuclei:{r['template']}",
-                    evidence=[{"kind": "nuclei",
-                               "content": f"template '{r['template']}' matched at {r['matched_at']} (severity {sev})"}],
-                    data={"base_url": base, "template": r["template"],
-                          "matched_at": r["matched_at"], "reference": r["reference"]}))
-            if nres:
-                self.emit("nuclei", Ptes.VULN_ANALYSIS.value,
-                          f"{base}: nuclei contributed {len(nres)} finding(s) from its template library")
         return res
 
-    def _crawl(self, base: str) -> tuple[list[str], dict]:
+    def _crawl(self, base: str) -> list[str]:
         origin = _origin_key(base)  # stay on the same host:port we were pointed at
         start = base if base.endswith("/") else base + "/"
         max_pages = self.config.limits.max_crawl_pages
         seen: set[str] = set()
         ordered: list[str] = []
-        cache: dict = {}  # url -> response, reused by checks so pages aren't re-fetched
         queue = [start]
 
         def _consider(nxt: str) -> None:
@@ -133,7 +110,6 @@ class WebAgent(Agent):
             if resp is None:
                 continue
             ordered.append(url)
-            cache[url] = resp
 
             # Follow in-scope redirects from Location header (301/302/307/308)
             loc = (resp.get("headers", {}) or {}).get("location")
@@ -151,7 +127,7 @@ class WebAgent(Agent):
                     continue
                 _consider(urljoin(url, href))
 
-        return ordered, cache
+        return ordered
 
     @staticmethod
     def _params_from(pages: list[str]) -> list[dict]:
