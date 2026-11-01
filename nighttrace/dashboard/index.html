@@ -503,6 +503,17 @@ function renderFilters(counts){
 }
 function setFilter(f){ curFilter=f; document.querySelectorAll('#filters button').forEach(b=>b.classList.toggle('active',b.dataset.f===f)); renderFindings(); }
 
+function evidenceMarkup(f){
+  const ev = (f.evidence||[]).map(e=>'<div class="ev-item"><span class="tag">'+esc(e.kind||'evidence')+'</span>'+esc(e.content||'')+'</div>').join('');
+  const key = f.id != null ? f.id : '';
+  if (!ev && !key) return '';
+  return '<div class="block ev" data-evidence-finding-id="'+esc(key)+'">'
+    +'<h4><span class="ic">▸</span>Evidence (proof)</h4>'
+    +(ev || '<p class="empty" style="font-size:12px;margin:4px 0">No direct evidence captured.</p>')
+    +(key ? '<div style="margin-top:6px"><a href="/findings/'+esc(key)+'" target="_blank" style="font-size:12px">View raw finding JSON</a></div>' : '')
+    +'</div>';
+}
+
 function renderFindings(){
   const list = curFilter==='all'? lastFindings : lastFindings.filter(f=>f.severity===curFilter);
   if(!list.length){ $('findingsList').innerHTML='<div class="empty">No findings in this category.</div>'; return; }
@@ -511,7 +522,6 @@ function renderFindings(){
   $('findingsList').innerHTML = list.map(f=>{
     const loc=(f.asset_host||'')+(f.asset_port?(':'+f.asset_port):'');
     const danger = DANGER[f.type] || DANGER_FALLBACK[f.severity] || '';
-    const ev=(f.evidence||[]).map(e=>'<div class="ev-item"><span class="tag">'+esc(e.kind||'evidence')+'</span>'+esc(e.content||'')+'</div>').join('');
     const refs=((f.data&&f.data.reference)||[]).slice(0,3).map(u=>'<a href="'+esc(u)+'" target="_blank">'+esc(u)+'</a>').join('<br>');
     return '<details class="finding"><summary>'
       +'<span class="sev '+esc(f.severity)+'">'+esc(f.severity)+'</span>'
@@ -521,7 +531,7 @@ function renderFindings(){
         +'<div class="block prob"><h4><span class="ic">?</span>What it is</h4><p>'+esc(f.description||'—')+'</p></div>'
         +'<div class="block dang"><h4><span class="ic">!</span>Why it\'s dangerous</h4><p>'+esc(danger)+'</p></div>'
         +'<div class="block fix"><h4><span class="ic">✓</span>How to fix it</h4><p>'+esc(f.fix||'—')+'</p></div>'
-        +(ev?'<div class="block ev"><h4><span class="ic">▸</span>Evidence (proof)</h4>'+ev+'</div>':'')
+        +evidenceMarkup(f)
         +(refs?'<div class="block ev"><h4><span class="ic">↗</span>References</h4><p style="font-family:ui-monospace,Consolas,monospace;font-size:12.5px">'+refs+'</p></div>':'')
       +'</div></details>';
   }).join('');
